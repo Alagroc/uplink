@@ -59,7 +59,14 @@ func loadToken(explicitFile string, createIfMissing bool) (string, error) {
 		return "", err
 	}
 	if !createIfMissing {
-		return "", fmt.Errorf("no token found: set UPLINK_TOKEN, or run uplink ground once to generate %s", path)
+		// Naming --create matters: it is a flag on the command the user most
+		// likely just ran. Creating one stays opt-in, because a stray
+		// `uplink token` on a crew host would mint a token that does not match
+		// ground's, and the resulting 401s are a confusing way to find out.
+		return "", fmt.Errorf("no token found at %s.\n"+
+			"  On the machine running ground:  uplink token --create   (or just start uplink ground)\n"+
+			"  On a crew host:                 export UPLINK_TOKEN=<the token from the ground machine>",
+			path)
 	}
 
 	tok, err := generateToken(path)
