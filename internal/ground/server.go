@@ -20,6 +20,11 @@ type Server struct {
 	Ground  *Ground
 	Token   string // operator + crew credential
 	Version string
+
+	// RequestShutdown, if set, is called when an authenticated shutdown request
+	// is accepted. It runs after the response has been handed back, so the
+	// caller learns the outcome before the process goes away.
+	RequestShutdown func(reason string)
 }
 
 // Handler builds the mux. Two MCP endpoints with different credentials:
@@ -64,6 +69,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/v1/crew/poll", s.crewOnly(s.handlePoll))
 	mux.HandleFunc("/v1/crew/logs", s.crewOnly(s.handleLogs))
 	mux.HandleFunc("/v1/crew/state", s.crewOnly(s.handleState))
+	mux.HandleFunc("/v1/shutdown", s.crewOnly(s.handleShutdown))
 	mux.HandleFunc("/v1/health", s.handleHealth)
 
 	return mux
@@ -183,6 +189,66 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 		"protocol": proto.Version,
 		"version":  s.Version,
 	})
+}
+
+// handleShutdown stops ground on request.
+//
+// Losing ground mid-flight costs work: a running job is marked failed on the
+// next start, and an agent blocked on a question is left without an answer. So
+// the default refuses while anything is in flight, and says what.
+func (s *Server) handleShutdown(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Force  bool   `json:"force"`
+		Reason string `json:"reason"`
+	}
+	if err := decode(w, r, &req); err != nil {
+		fail(w, http.StatusBadRequest, err)
+		return
+	}
+	if s.RequestShutdown == nil {
+		fail(w, http.StatusNotImplemented, fmt.Errorf("this ground was not started with shutdown support"))
+		return
+	}
+
+	active := s.Ground.Jobs("", true, 0)
+	pending := s.Ground.Inbox(true, 0)
+
+	if !req.Force && (len(active) > 0 || len(pending) > 0) {
+		respond(w, http.StatusConflict, map[string]any{
+			"error":            "refusing to shut down while work is in flight; pass force to override",
+			"active_jobs":      jobSummaries(active),
+			"pending_question": len(pending),
+		})
+		return
+	}
+
+	reason := req.Reason
+	if reason == "" {
+		reason = "shutdown requested by operator"
+	}
+	s.Ground.store.Auditf("shutdown: %s (active_jobs=%d pending_questions=%d force=%v)",
+		reason, len(active), len(pending), req.Force)
+
+	respond(w, http.StatusOK, map[string]any{
+		"status":            "shutting down",
+		"abandoned_jobs":    jobSummaries(active),
+		"abandoned_pending": len(pending),
+	})
+
+	// Shut down after this handler returns, so the reply is delivered.
+	go s.RequestShutdown(reason)
+}
+
+func jobSummaries(jobs []proto.Job) []string {
+	out := make([]string, 0, len(jobs))
+	for _, j := range jobs {
+		label := j.Label
+		if label == "" {
+			label = j.Kind
+		}
+		out = append(out, fmt.Sprintf("%s (%s, crew=%s, %s)", j.ID, j.State, j.CrewName, label))
+	}
+	return out
 }
 
 // HTTPServer returns a configured http.Server. WriteTimeout is deliberately

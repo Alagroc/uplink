@@ -62,6 +62,9 @@ uplink call submit_job '{"kind":"exec","crew":"devbox","command":"uname -a"}'
 uplink call job_logs '{"job_id":"job_..."}'
 ```
 
+Stop it again with `uplink shutdown`. That refuses while a job is running or an
+agent is waiting on you, and tells you what — pass `--force` to override.
+
 `uplink init` is worth running first even though `ground` would create the token
 by itself: it is idempotent, it tells you which agent CLIs it can see on this
 machine, and it prints the exact `claude mcp add` and `ssh -R` lines for your
@@ -241,9 +244,14 @@ claude mcp add uplink --scope user -e UPLINK_TOKEN="$(uplink token)" -- \
 } } }
 ```
 
-`uplink` must be on `PATH`; use an absolute path if it is not. Changing a server
-definition needs a CLI restart, though ground itself can be restarted freely
-without touching any of this.
+`uplink` must be on `PATH`, **or the config must give its absolute path**. A
+relative path like `./bin/uplink` will not work: your CLI spawns the server from
+whatever directory it happens to be in, and at `--scope user` that is rarely the
+one you ran `mcp add` from. `uplink init` prints an absolute path for exactly
+this reason, and suggests installing the binary so the config can stay tidy.
+
+Changing a server definition needs a CLI restart, though ground itself can be
+restarted freely without touching any of this.
 
 > Verified live: Claude Code, over both the stdio bridge and the HTTP endpoint.
 > The Codex and Cursor definitions follow each tool's documented config format
@@ -461,6 +469,10 @@ a way to pass the prompt, and point it at `uplink radio`.
 For the operator side not connecting, see
 [When it will not connect](#when-it-will-not-connect). On the crew side:
 
+**`address already in use`** — a ground is probably already running. `uplink
+shutdown` stops it; the error message says which case you are in, because
+something else on that port is a different problem from a second uplink.
+
 **`cannot reach ground`** — the tunnel is down or landed on the wrong interface.
 Check with `curl -s http://127.0.0.1:8765/v1/health` on the crew host.
 
@@ -483,7 +495,7 @@ deciding for themselves; naming the decisions that are yours makes them escalate
 ## Layout
 
 ```
-cmd/uplink/        CLI: init, ground, crew, capcom, radio, call, token
+cmd/uplink/        CLI: init, ground, shutdown, crew, capcom, radio, call, token
 internal/mcp/      MCP over stdio and streamable HTTP
 internal/ground/   hub: crew registry, jobs, inbox, the tool surface
 internal/crew/     worker: poll loop, job execution, log shipping

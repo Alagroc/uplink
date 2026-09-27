@@ -29,6 +29,7 @@ Usage: uplink <command> [flags]
 Commands:
   init      Prepare this machine as the operator: create its token, print next steps.
   ground    Run mission control (the hub). Start this on your laptop.
+  shutdown  Stop a running ground.
   crew      Run a worker on a remote machine; connects out to ground.
   capcom    stdio MCP bridge for your local AI CLI (claude/codex/cursor-agent).
   radio     stdio MCP bridge a remote agent uses to reach the operator.
@@ -62,6 +63,8 @@ func main() {
 		err = runInit(os.Args[2:])
 	case "ground":
 		err = runGround(ctx, os.Args[2:])
+	case "shutdown":
+		err = runShutdown(ctx, os.Args[2:])
 	case "crew":
 		err = runCrew(ctx, os.Args[2:])
 	case "capcom":

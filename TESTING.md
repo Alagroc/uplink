@@ -5,12 +5,12 @@ make test        # everything, with the race detector
 go test ./...    # faster, no race detector
 ```
 
-104 tests across 7 packages. All pass under `-race`.
+109 tests across 7 packages. All pass under `-race`.
 
 | Package | Tests | Covers |
 | --- | --- | --- |
 | `internal/mcp` | 18 | protocol negotiation, tool dispatch, schema shape, stdio and HTTP transports |
-| `internal/ground` | 36 | crew registry, dispatch, the question/answer round trip, credential isolation, restart recovery |
+| `internal/ground` | 41 | crew registry, dispatch, the question/answer round trip, credential isolation, restart recovery |
 | `internal/crew` | 11 | workdir boundary enforcement, agent transcript condensation |
 | `internal/runner` | 14 | launch specs for all three CLIs, runner preference order, generated MCP config, token handling |
 | `internal/bridge` | 7 | stdio↔HTTP pipe, concurrency under a blocking call, failure reporting |
@@ -52,6 +52,12 @@ tools well and flailing: `submit_job` on an agent job reminds the caller to
 watch the inbox, an empty `list_crew` explains how to start one, an unknown crew
 name lists the ones that do exist, and `job_logs` reports a `next_seq` cursor so
 tailing does not re-read the same output.
+
+**Shutdown safety.** `uplink shutdown` refuses while a job is running or an
+agent is waiting on an answer, and names what is in flight; `--force` overrides
+and reports what it abandoned. An unauthenticated request never stops ground.
+The unauthenticated health endpoint is what lets the client tell "nothing is
+listening" apart from "something else owns this port".
 
 ## Findings from the pre-commit review
 

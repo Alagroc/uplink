@@ -83,6 +83,12 @@ func runInit(args []string) error {
 		}
 	}
 
+	if !onPath() {
+		fmt.Fprintf(&b, "\nNote: uplink is not on your PATH, so the lines above use its full path.\n")
+		fmt.Fprintf(&b, "      Installing it makes them tidier, and makes the MCP config portable:\n")
+		fmt.Fprintf(&b, "        sudo install -m 0755 %s /usr/local/bin/uplink\n", bin)
+	}
+
 	if created {
 		fmt.Fprintf(&b, "\nThis token is this machine's operator credential: treat it as a password.\n")
 		fmt.Fprintf(&b, "Do NOT run init on a crew host — copy this token to it instead, or it will\n")
@@ -93,23 +99,35 @@ func runInit(args []string) error {
 	return nil
 }
 
-// selfName is how the user most likely invokes this binary, so the printed
-// instructions can be pasted as-is.
+// selfName is how to refer to this binary in instructions meant to be pasted.
+//
+// Never a relative path. These lines end up in an MCP server definition that
+// the AI CLI spawns from whatever directory it happens to be in, and a
+// `./bin/uplink` there simply fails to launch. Absolute, or the bare name when
+// it is on PATH.
 func selfName() string {
 	exe, err := os.Executable()
 	if err != nil {
 		return "uplink"
 	}
-	if lookedUp, err := execLookPath(filepath.Base(exe)); err == nil && lookedUp != "" {
-		return filepath.Base(exe)
+	if resolved, err := filepath.EvalSymlinks(exe); err == nil {
+		exe = resolved
 	}
-	// Not on PATH: show the path they actually ran, relative if that is shorter.
-	if wd, err := os.Getwd(); err == nil {
-		if rel, err := filepath.Rel(wd, exe); err == nil && !strings.HasPrefix(rel, "..") {
-			return "./" + rel
-		}
+	base := filepath.Base(exe)
+	if onPath, err := execLookPath(base); err == nil && onPath != "" {
+		return base
 	}
 	return exe
+}
+
+// onPath reports whether this binary can be launched by bare name.
+func onPath() bool {
+	exe, err := os.Executable()
+	if err != nil {
+		return false
+	}
+	_, err = execLookPath(filepath.Base(exe))
+	return err == nil
 }
 
 func defaultRunnersFile(home string) string {

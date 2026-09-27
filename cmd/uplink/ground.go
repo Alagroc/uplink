@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/Alagroc/uplink/internal/ground"
@@ -57,11 +58,25 @@ func runGround(ctx context.Context, args []string) error {
 		Bell:         *bell,
 	}, func(line string) { fmt.Fprintln(os.Stderr, line) })
 
-	srv := &ground.Server{Ground: g, Token: token, Version: Version}
+	stopped := make(chan string, 1)
+	srv := &ground.Server{
+		Ground:  g,
+		Token:   token,
+		Version: Version,
+		RequestShutdown: func(reason string) {
+			select {
+			case stopped <- reason:
+			default:
+			}
+		},
+	}
 	httpSrv := srv.HTTPServer(*addr)
 
 	ln, err := net.Listen("tcp", *addr)
 	if err != nil {
+		if errors.Is(err, syscall.EADDRINUSE) {
+			return fmt.Errorf("cannot listen on %s: address already in use.%s", *addr, warnIfGroundAlreadyRunning("http://"+*addr))
+		}
 		return fmt.Errorf("listen on %s: %w", *addr, err)
 	}
 
@@ -77,6 +92,8 @@ func runGround(ctx context.Context, args []string) error {
 	select {
 	case <-ctx.Done():
 		logf("shutting down")
+	case reason := <-stopped:
+		logf("shutting down: %s", reason)
 	case err := <-errCh:
 		return err
 	}
