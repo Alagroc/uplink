@@ -283,6 +283,45 @@ func TestDetectFindsOnlyInstalledRunners(t *testing.T) {
 	}
 }
 
+// The default runner must be a documented choice, not an artefact of sorting.
+func TestDetectReturnsPreferenceOrder(t *testing.T) {
+	dir := t.TempDir()
+	// Install them in an order that alphabetical sorting would get wrong for the
+	// custom entry, and that proves preference beats alphabetical.
+	for _, name := range []string{"cursor-agent", "codex", "claude", "aardvark-agent"} {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte("#!/bin/sh\nexit 0\n"), 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	t.Setenv("PATH", dir)
+
+	specs := Defaults()
+	specs["aardvark-agent"] = Spec{Command: "aardvark-agent", MCPStyle: StyleNone}
+
+	got := Detect(specs)
+	want := []string{"claude", "codex", "cursor-agent", "aardvark-agent"}
+	if len(got) != len(want) {
+		t.Fatalf("Detect = %v, want %v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("Detect = %v, want %v (known runners in preference order, unknown ones last)", got, want)
+		}
+	}
+}
+
+// With only a less-preferred CLI installed, that is what gets picked.
+func TestDetectPrefersWhatIsActuallyInstalled(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "cursor-agent"), []byte("#!/bin/sh\nexit 0\n"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", dir)
+	if got := Detect(Defaults()); len(got) != 1 || got[0] != "cursor-agent" {
+		t.Fatalf("Detect = %v, want [cursor-agent]", got)
+	}
+}
+
 func TestLoadMergesOverridesOntoDefaults(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "runners.json")

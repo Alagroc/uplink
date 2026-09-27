@@ -130,28 +130,51 @@ In your local AI CLI, once capcom is wired up:
 The model calls `submit_job`, polls `job_logs`, and you have a conversation
 about the results. When the remote agent needs a decision, it lands in `inbox`.
 
-## Wiring up your CLI
+## Connecting your AI CLI to uplink
 
-`uplink capcom` is a stdio MCP server. Every CLI can launch one, so this works
-identically across all three. Ground holds all the state; capcom is a thin pipe,
-and a fresh one per session is fine.
+Your CLI appears twice in an uplink setup, and keeping the two apart saves a lot
+of confusion:
 
-**Claude Code** — `~/.claude.json`, or `.mcp.json` in a project:
+| | Where it runs | Who starts it | What you configure |
+| --- | --- | --- | --- |
+| **the operator** | your laptop | you, normally (`claude`, `codex`, `cursor-agent`) | wire it to `uplink capcom`, once |
+| **the crew agent** | the devbox | `uplink crew`, per job | nothing — uplink wires it itself |
 
-```json
-{
-  "mcpServers": {
-    "uplink": {
-      "command": "uplink",
-      "args": ["capcom", "--ground", "http://127.0.0.1:8765"]
-    }
-  }
-}
+**You only ever configure the operator side.** On the devbox you install the CLI
+and authenticate it, and that is all: the crew launches it per job with its
+`radio` already attached, so there is no MCP config to write over there.
+
+All three CLIs are MCP clients, so the operator wiring is the same shape
+everywhere: run `uplink capcom` as a stdio MCP server. It holds no state — ground
+does — so a fresh one per session is fine and several can run at once.
+
+Everything below assumes ground is up on your laptop (`uplink ground`).
+
+### Claude Code
+
+```sh
+claude mcp add uplink --scope user -- uplink capcom --ground http://127.0.0.1:8765
 ```
 
-Or in one line: `claude mcp add uplink -- uplink capcom --ground http://127.0.0.1:8765`
+`--scope user` makes uplink available in every project. Use `--scope local` for
+just the current directory, or `--scope project` to write a `.mcp.json` that
+teammates get too. Verify with `claude mcp list`, or `/mcp` inside a session:
 
-**Codex** — `~/.codex/config.toml`:
+```
+uplink: uplink capcom --ground http://127.0.0.1:8765 - ✔ Connected
+```
+
+Claude Code also speaks the HTTP transport, if you would rather not run a bridge
+process:
+
+```sh
+claude mcp add uplink --scope user --transport http \
+  http://127.0.0.1:8765/mcp --header "Authorization: Bearer $(uplink token)"
+```
+
+### Codex
+
+Add the server to `~/.codex/config.toml`:
 
 ```toml
 [mcp_servers.uplink]
@@ -159,7 +182,16 @@ command = "uplink"
 args = ["capcom", "--ground", "http://127.0.0.1:8765"]
 ```
 
-**Cursor** — `~/.cursor/mcp.json` or `.cursor/mcp.json`:
+Recent Codex versions also manage this from the command line (`codex mcp add`,
+`codex mcp list`); the file above is the underlying configuration either way.
+Codex's own streamable-HTTP client has been behind an experimental config flag,
+which is the main reason uplink ships the stdio bridge as the default path for
+every CLI.
+
+### Cursor
+
+Add the server to `~/.cursor/mcp.json` for all projects, or `.cursor/mcp.json`
+inside one:
 
 ```json
 {
@@ -172,10 +204,104 @@ args = ["capcom", "--ground", "http://127.0.0.1:8765"]
 }
 ```
 
-All three need `UPLINK_TOKEN` in the environment, or a readable
-`~/.uplink/token`. Ground also serves MCP over streamable HTTP at
-`http://127.0.0.1:8765/mcp` with a bearer token, if you prefer to skip capcom
-and your client supports it.
+The same file is what Cursor's Settings → MCP panel edits, and `cursor-agent`
+reads it too, so the CLI and the editor share one definition.
+
+### The token, and what all three need
+
+`capcom` finds the operator token in `~/.uplink/token`, or in `UPLINK_TOKEN` if
+it is set. Nothing needs it in the config, but you can pin it if your token lives
+somewhere unusual — Claude Code takes `-e`, and the other two take an `env`
+block:
+
+```sh
+claude mcp add uplink --scope user -e UPLINK_TOKEN="$(uplink token)" -- \
+  uplink capcom --ground http://127.0.0.1:8765
+```
+
+```json
+{ "mcpServers": { "uplink": {
+  "command": "uplink",
+  "args": ["capcom", "--ground", "http://127.0.0.1:8765"],
+  "env": { "UPLINK_TOKEN": "..." }
+} } }
+```
+
+`uplink` must be on `PATH`; use an absolute path if it is not. Changing a server
+definition needs a CLI restart, though ground itself can be restarted freely
+without touching any of this.
+
+> Verified live: Claude Code, over both the stdio bridge and the HTTP endpoint.
+> The Codex and Cursor definitions follow each tool's documented config format
+> and the same `capcom` mechanism, but have not been run end to end here — see
+> [TESTING.md](TESTING.md).
+
+### Checking it actually works
+
+Tools being listed only proves the bridge is up. Ask for something real:
+
+> Call list_crew and tell me what is connected.
+
+You should get your crew back with its host, OS, arch and available runners. If
+no crew has registered, `list_crew` says so and gives you the command to start
+one.
+
+### When it will not connect
+
+Run the bridge by hand — it says what it is doing and fails loudly:
+
+```sh
+uplink capcom --ground http://127.0.0.1:8765
+# [capcom] bridging stdio to http://127.0.0.1:8765/mcp
+```
+
+Then, in order:
+
+- **`no token found`** — ground has not run yet, or its token is elsewhere.
+  `uplink token` prints it; `uplink token --create` makes one.
+- **`connection refused`** — ground is not running, or is on another port. Check
+  with `curl -s http://127.0.0.1:8765/v1/health`.
+- **Connected, but no `mcp__uplink__*` tools** — something else is on that port.
+  The health endpoint identifies uplink.
+- **Tools work, `list_crew` is empty** — the operator side is fine; the crew has
+  not registered. Read the crew's own output on the devbox.
+
+## Which agent CLI does a crew run?
+
+A crew reports what it found when it registers, which is what `list_crew` shows:
+
+```
+devbox  [ONLINE]
+  host: ip-10-0-1-42  linux/arm64
+  runners: claude, codex
+```
+
+For an `agent` job, the CLI is chosen by the first of these that applies:
+
+1. **What the job asked for** — `submit_job` with `runner: "codex"`. Highest
+   precedence, and how you send one task to Claude and the next to Codex on the
+   same host.
+2. **The crew's default** — `uplink crew --runner codex`. Pins that whole crew.
+3. **The most preferred CLI installed** — `claude`, then `codex`, then
+   `cursor-agent`. This order is deliberate, not alphabetical accident; anything
+   uplink has no built-in preference for comes after, alphabetically.
+
+"Installed" means the spec's command resolves on the crew's `PATH`, checked at
+registration. A crew with no agent CLI still registers and still runs `exec`
+jobs — `list_crew` shows `runners: none found`, and an `agent` job fails with a
+message naming what it looked for.
+
+Naming a runner that is not installed fails fast with the same kind of message,
+rather than silently falling back to a different CLI — if you asked for Codex,
+you want to know it was not there.
+
+This is also how you run several models against one job queue: give each
+container its own crew name and `--runner`, then dispatch by role.
+
+```sh
+uplink crew --name impl-claude  --role implementer --runner claude
+uplink crew --name review-codex --role reviewer    --runner codex
+```
 
 ## Operator tools
 
@@ -219,12 +345,13 @@ uplink crew --name review-1 --role reviewer   --workdir /work/myapp
 uplink crew --name docs-1   --role documenter --workdir /work/myapp
 ```
 
-Then from your laptop: *"send the migration to a implementer, and when it is
+Then from your laptop: *"send the migration to an implementer, and when it is
 done have a reviewer check the diff."* Your local model dispatches by role, and
 each bot's questions arrive in the same inbox tagged with its crew name.
 
 Ground picks the least loaded online crew for a role, so adding capacity is just
-starting another one.
+starting another one. Add `--runner` to put different models behind different
+roles — see [Which agent CLI does a crew run?](#which-agent-cli-does-a-crew-run).
 
 ## One notification caveat, stated plainly
 
@@ -308,25 +435,33 @@ Agent CLIs change their flags. The launch specs are data, not code — drop a
 Placeholders: `{{prompt}}`, `{{system}}` (uplink's briefing for the agent), and
 `{{mcp_config}}` (a generated file registering `uplink radio`). `mcp_style` is
 `config-flag`, `codex-overrides`, or `none` when the agent is already configured.
-Anything you leave out keeps its default, and you can add your own runner names.
+Anything you leave out keeps its default, and you can add your own runner names —
+a name uplink does not know is still selectable with `--runner` or the `runner`
+job argument, it just sits after the built-in ones in the preference order.
 
 This is also how you plug in a CLI uplink has never heard of: give it a command,
 a way to pass the prompt, and point it at `uplink radio`.
 
 ## Troubleshooting
 
+For the operator side not connecting, see
+[When it will not connect](#when-it-will-not-connect). On the crew side:
+
 **`cannot reach ground`** — the tunnel is down or landed on the wrong interface.
 Check with `curl -s http://127.0.0.1:8765/v1/health` on the crew host.
 
-**`no token found`** — set `UPLINK_TOKEN`, or copy `~/.uplink/token` from the
-laptop. Ground creates it on first run; crew never does.
+**`no token found`** — set `UPLINK_TOKEN` on the crew host. Ground creates the
+token on first run; crew never does.
 
-**`runners: none found on PATH`** — the crew host has no agent CLI installed, so
-only `exec` jobs will work. Install one, or point a runner spec at it.
+**`runners: none found`** — no agent CLI on the crew's `PATH`, so only `exec`
+jobs will work. Install one, or point a runner spec at it.
 
 **A job hangs at `running` with no output** — read the raw transcript on the
 crew host: `~/.uplink/crew/transcripts/<job_id>.jsonl`. Everything the agent did
 is there, including what uplink condensed away.
+
+**A job used the wrong CLI** — precedence is job, then crew default, then the
+preference order; `list_crew` shows what that crew actually has.
 
 **An agent never asks anything** — say so in the prompt. Agents default to
 deciding for themselves; naming the decisions that are yours makes them escalate.

@@ -127,6 +127,8 @@ func (c *Crew) buildExec(job proto.Job, workdir string) *runner.Built {
 }
 
 func (c *Crew) buildAgent(job proto.Job, workdir string) (*runner.Built, error) {
+	// Precedence: what the job asked for, else the crew's --runner default,
+	// else the most preferred CLI actually installed on this host.
 	name := job.Payload.Runner
 	if name == "" {
 		name = c.cfg.DefaultRunner
@@ -134,7 +136,9 @@ func (c *Crew) buildAgent(job proto.Job, workdir string) (*runner.Built, error) 
 	if name == "" {
 		detected := runner.Detect(c.cfg.Runners)
 		if len(detected) == 0 {
-			return nil, fmt.Errorf("no agent CLI found on PATH on crew %q (looked for %s)", c.cfg.Name, strings.Join(knownNames(c.cfg.Runners), ", "))
+			return nil, fmt.Errorf("no agent CLI found on PATH on crew %q (looked for %s); "+
+				"install one, or point a runner spec at it in runners.json",
+				c.cfg.Name, strings.Join(knownNames(c.cfg.Runners), ", "))
 		}
 		name = detected[0]
 	}

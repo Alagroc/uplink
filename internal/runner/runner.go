@@ -117,20 +117,39 @@ func Load(path string) (map[string]Spec, error) {
 	return specs, nil
 }
 
-// Detect returns the specs whose command is on PATH, sorted by name.
+// preferenceOrder is the order a crew picks a runner when neither the job nor
+// the crew named one. It is an explicit list rather than whatever alphabetical
+// ordering happens to produce, so "which CLI ran my job?" has an answer that can
+// be written down.
+var preferenceOrder = []string{"claude", "codex", "cursor-agent"}
+
+// Detect returns the runners whose command is on PATH, most preferred first.
+// Runners uplink has no built-in preference for follow, alphabetically.
 func Detect(specs map[string]Spec) []string {
-	var found []string
+	installed := map[string]bool{}
 	for name, spec := range specs {
 		cmd := spec.Command
 		if cmd == "" {
 			cmd = name
 		}
 		if _, err := exec.LookPath(cmd); err == nil {
-			found = append(found, name)
+			installed[name] = true
 		}
 	}
-	sort.Strings(found)
-	return found
+
+	found := make([]string, 0, len(installed))
+	for _, name := range preferenceOrder {
+		if installed[name] {
+			found = append(found, name)
+			delete(installed, name)
+		}
+	}
+	rest := make([]string, 0, len(installed))
+	for name := range installed {
+		rest = append(rest, name)
+	}
+	sort.Strings(rest)
+	return append(found, rest...)
 }
 
 // ChildEnv returns the parent environment with uplink's own operator

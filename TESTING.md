@@ -5,14 +5,14 @@ make test        # everything, with the race detector
 go test ./...    # faster, no race detector
 ```
 
-102 tests across 7 packages. All pass under `-race`.
+104 tests across 7 packages. All pass under `-race`.
 
 | Package | Tests | Covers |
 | --- | --- | --- |
 | `internal/mcp` | 18 | protocol negotiation, tool dispatch, schema shape, stdio and HTTP transports |
 | `internal/ground` | 36 | crew registry, dispatch, the question/answer round trip, credential isolation, restart recovery |
 | `internal/crew` | 11 | workdir boundary enforcement, agent transcript condensation |
-| `internal/runner` | 12 | launch specs for all three CLIs, generated MCP config, token handling |
+| `internal/runner` | 14 | launch specs for all three CLIs, runner preference order, generated MCP config, token handling |
 | `internal/bridge` | 7 | stdio↔HTTP pipe, concurrency under a blocking call, failure reporting |
 | `internal/store` | 5 | append-only log, replay, crash tolerance, file permissions |
 | `test` | 13 | end-to-end against the real binary: ground + a crew process + real jobs |
@@ -192,11 +192,14 @@ have not been run live — see below.
 
 ## Not covered by automated tests
 
-- **Codex and cursor-agent runners.** Neither CLI is installed on the machine
-  uplink was built on. Their argument construction, MCP registration and TOML
-  quoting are unit-tested, but no live session has run through them. Expect to
-  adjust `~/.uplink/runners.json` on first use — that is exactly why the launch
-  specs are data rather than code.
+- **Codex and cursor-agent.** Neither CLI is installed on the machine uplink was
+  built on, so neither has been exercised live in either of its two roles. As a
+  *crew runner*, their argument construction, MCP registration and TOML quoting
+  are unit-tested but never launched — expect to adjust
+  `~/.uplink/runners.json` on first use, which is exactly why the launch specs
+  are data rather than code. As an *operator*, the config snippets in the README
+  follow each tool's documented format and drive the same `capcom` bridge that
+  Claude Code was verified against, but the wiring itself is untested.
 - **Windows crew.** Process-group termination is implemented for unix only;
   the fallback kills just the direct child.
 - **Long-haul tunnel behaviour.** Reconnection with backoff and crew
