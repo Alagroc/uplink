@@ -5,17 +5,17 @@ make test        # everything, with the race detector
 go test ./...    # faster, no race detector
 ```
 
-109 tests across 7 packages. All pass under `-race`.
+122 tests across 7 packages. All pass under `-race`.
 
 | Package | Tests | Covers |
 | --- | --- | --- |
 | `internal/mcp` | 18 | protocol negotiation, tool dispatch, schema shape, stdio and HTTP transports |
 | `internal/ground` | 41 | crew registry, dispatch, the question/answer round trip, credential isolation, restart recovery |
 | `internal/crew` | 11 | workdir boundary enforcement, agent transcript condensation |
-| `internal/runner` | 14 | launch specs for all three CLIs, runner preference order, generated MCP config, token handling |
+| `internal/runner` | 15 | launch specs for all three CLIs, runner preference order, generated MCP config, token handling |
 | `internal/bridge` | 7 | stdio↔HTTP pipe, concurrency under a blocking call, failure reporting |
 | `internal/store` | 5 | append-only log, replay, crash tolerance, file permissions |
-| `test` | 13 | end-to-end against the real binary: ground + a crew process + real jobs |
+| `test` | 14 | end-to-end against the real binary: ground + a crew process + real jobs |
 
 The end-to-end tests build `uplink` and run an actual ground daemon and crew
 process over a real socket. The stand-in for the agent is a Python script that
@@ -31,6 +31,16 @@ options; a `reply` releases the agent; the answer arrives verbatim; the agent
 finishes. Also the failure modes: nobody answers and the agent is released with
 guidance it can act on, and cancelling a job releases an agent blocked on it
 rather than leaving it parked.
+
+**Credential scoping.** The three classes are tested against each other: a crew
+token is refused on `/mcp` and `/v1/shutdown`, the operator token is refused on
+every crew endpoint (with a message naming the command that fixes it), and a
+token minted for `devbox` cannot register as anything else. The lateral-movement
+case has its own test: crew A cannot poll, ship logs to, or set state on crew B,
+while both can still serve themselves — so the check is provably not just
+refusing everything. Roles on a token override whatever a crew claims. Minting
+and revoking are asserted to take effect against a *running* server, since the
+store is re-read when the file changes rather than at start-up only.
 
 **Credential isolation.** The operator token is rejected on `/mcp/agent` and an
 unauthenticated call is rejected on `/mcp`. Per-job tokens stop working the

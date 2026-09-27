@@ -5,6 +5,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -15,18 +16,25 @@ import (
 
 func newTestServer(t *testing.T) (*Server, *httptest.Server, chan string) {
 	t.Helper()
-	st, err := store.Open(t.TempDir())
+	dir := t.TempDir()
+	st, err := store.Open(dir)
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { st.Close() })
 
+	crewTokens, err := OpenCrewTokens(filepath.Join(dir, "crew-tokens.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+
 	g := New(st, Options{OfflineAfter: time.Minute}, nil)
 	stopped := make(chan string, 1)
 	srv := &Server{
-		Ground:  g,
-		Token:   "operator-token",
-		Version: "test",
+		Ground:     g,
+		Token:      "operator-token",
+		Version:    "test",
+		CrewTokens: crewTokens,
 		RequestShutdown: func(reason string) {
 			select {
 			case stopped <- reason:

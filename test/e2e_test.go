@@ -7,6 +7,7 @@
 package e2e
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"net"
@@ -41,11 +42,12 @@ func TestMain(m *testing.M) {
 
 // harness is a running ground plus one crew.
 type harness struct {
-	t       *testing.T
-	url     string
-	token   string
-	home    string
-	workdir string
+	t         *testing.T
+	url       string
+	token     string // operator credential
+	crewToken string // credential for the "e2e" crew
+	home      string
+	workdir   string
 }
 
 // freePort asks the kernel for an unused port.
@@ -83,10 +85,14 @@ func startHarness(t *testing.T, crewArgs ...string) *harness {
 	h.waitHealthy()
 	h.token = h.readToken()
 
-	args := append([]string{"crew", "--name", "e2e", "--role", "builder",
+	// Mint the crew credential after ground is already up, which exercises the
+	// store's live reload: a token minted now must work without a restart.
+	h.crewToken = h.mintCrewToken("e2e", "builder")
+
+	args := append([]string{"crew", "--name", "e2e",
 		"--ground", url, "--workdir", workdir, "--poll", "2s"}, crewArgs...)
 	crew := exec.Command(uplinkBin, args...)
-	crew.Env = append(os.Environ(), "UPLINK_HOME="+home, "UPLINK_TOKEN="+h.token)
+	crew.Env = append(os.Environ(), "UPLINK_HOME="+home, "UPLINK_TOKEN="+h.crewToken)
 	crew.Stderr = prefixWriter{t, "crew"}
 	if err := crew.Start(); err != nil {
 		t.Fatal(err)
@@ -142,6 +148,26 @@ func (h *harness) readToken() string {
 	}
 	h.t.Fatalf("ground never wrote a token to %s", path)
 	return ""
+}
+
+// mintCrewToken issues a crew credential and returns the secret.
+func (h *harness) mintCrewToken(name string, roles ...string) string {
+	h.t.Helper()
+	args := []string{"crew-token", "add", name}
+	for _, role := range roles {
+		args = append(args, "--role", role)
+	}
+	cmd := exec.Command(uplinkBin, args...)
+	cmd.Env = append(os.Environ(), "UPLINK_HOME="+h.home)
+	out, err := cmd.Output()
+	if err != nil {
+		h.t.Fatalf("minting a crew token failed: %v", err)
+	}
+	token := strings.TrimSpace(string(out))
+	if token == "" {
+		h.t.Fatal("crew-token add printed no token on stdout")
+	}
+	return token
 }
 
 // call runs `uplink call` and returns its stdout.
@@ -349,6 +375,30 @@ func TestEndpointsEnforceSeparateCredentials(t *testing.T) {
 	defer resp2.Body.Close()
 	if resp2.StatusCode != http.StatusUnauthorized {
 		t.Errorf("the operator endpoint must require a token, got %d", resp2.StatusCode)
+	}
+}
+
+// The credential cutover, end to end: a crew handed the operator token must be
+// refused, and told what to do instead.
+func TestCrewWithOperatorTokenIsRefused(t *testing.T) {
+	h := startHarness(t)
+
+	// A rejected crew retries with backoff rather than exiting, which is right
+	// for a dropped tunnel but means this has to be time-boxed.
+	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, uplinkBin, "crew", "--name", "impostor",
+		"--ground", h.url, "--workdir", h.workdir, "--poll", "1s")
+	cmd.Env = append(os.Environ(), "UPLINK_HOME="+h.home, "UPLINK_TOKEN="+h.token)
+	out, _ := cmd.CombinedOutput()
+	text := string(out)
+
+	if !strings.Contains(text, "crew-token add") {
+		t.Errorf("a crew using the operator token should be told to mint one:\n%s", text)
+	}
+	// And it must not have registered.
+	if listed := h.call("list_crew"); strings.Contains(listed, "impostor") {
+		t.Errorf("the impostor crew registered anyway:\n%s", listed)
 	}
 }
 

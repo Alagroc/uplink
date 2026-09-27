@@ -63,13 +63,16 @@ func runInit(args []string) error {
 	fmt.Fprintf(&b, "     Codex and Cursor use a config file instead — see the README.\n\n")
 
 	fmt.Fprintf(&b, "Then for each remote machine:\n\n")
-	fmt.Fprintf(&b, "  3. copy this binary there, open a tunnel from here:\n")
+	fmt.Fprintf(&b, "  3. mint that crew its own credential, here on the ground machine:\n")
+	fmt.Fprintf(&b, "       %s crew-token add devbox --role builder\n", bin)
+	fmt.Fprintf(&b, "  4. copy this binary there, open a tunnel from here:\n")
 	fmt.Fprintf(&b, "       ssh -R %s:127.0.0.1:%s <devbox>\n", portOf(url), portOf(url))
-	fmt.Fprintf(&b, "  4. and on that machine, with an agent CLI installed and authenticated:\n")
-	fmt.Fprintf(&b, "       export UPLINK_TOKEN=<the token printed by `%s token` on this machine>\n", bin)
-	fmt.Fprintf(&b, "       %s crew --name devbox --role builder --workdir /path/to/project\n\n", bin)
+	fmt.Fprintf(&b, "  5. and on that machine, with an agent CLI installed and authenticated:\n")
+	fmt.Fprintf(&b, "       export UPLINK_TOKEN=<the crew token from step 3>\n")
+	fmt.Fprintf(&b, "       %s crew --name devbox --workdir /path/to/project\n\n", bin)
 
-	fmt.Fprintf(&b, "Print the token when you need it:  %s token\n", bin)
+	fmt.Fprintf(&b, "Print the operator token again:    %s token\n", bin)
+	fmt.Fprintf(&b, "List or revoke crew credentials:   %s crew-token list | revoke <name>\n", bin)
 	fmt.Fprintf(&b, "Check the whole chain afterwards:  %s call list_crew\n", bin)
 
 	// Knowing what is here is useful on an operator box too: the same machine is
@@ -90,9 +93,12 @@ func runInit(args []string) error {
 	}
 
 	if created {
-		fmt.Fprintf(&b, "\nThis token is this machine's operator credential: treat it as a password.\n")
-		fmt.Fprintf(&b, "Do NOT run init on a crew host — copy this token to it instead, or it will\n")
-		fmt.Fprintf(&b, "generate a different one and fail to authenticate.\n")
+		fmt.Fprintf(&b, "\nThat token is this machine's OPERATOR credential: treat it as a password.\n")
+		fmt.Fprintf(&b, "It dispatches jobs and stops ground, so it stays on this machine. Crew get\n")
+		fmt.Fprintf(&b, "their own scoped credentials from `%s crew-token add`, which can only\n", bin)
+		fmt.Fprintf(&b, "reach the crew endpoints and only as the one crew they name.\n")
+		fmt.Fprintf(&b, "Do NOT run init on a crew host: it would generate an unrelated operator\n")
+		fmt.Fprintf(&b, "token that authenticates against nothing.\n")
 	}
 
 	fmt.Print(b.String())

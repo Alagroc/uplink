@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/Alagroc/uplink/internal/crew"
@@ -34,9 +35,20 @@ func runCrew(ctx context.Context, args []string) error {
 		return fmt.Errorf("--name is required")
 	}
 
-	token, err := loadToken(*tokenFile, false)
-	if err != nil {
-		return err
+	// UPLINK_CREW_TOKEN wins, so a machine that is both operator and crew — a
+	// testing box — can hold both credentials at once.
+	token := strings.TrimSpace(os.Getenv("UPLINK_CREW_TOKEN"))
+	if token == "" {
+		var err error
+		if token, err = loadToken(*tokenFile, false); err != nil {
+			return err
+		}
+	}
+	warn := logger("crew")
+	if !ground.IsCrewToken(token) {
+		warn("warning: this does not look like a crew token. Crew need their own credential now:")
+		warn("  on the ground machine:  uplink crew-token add %s --role <role>", *name)
+		warn("  then on this host:      export UPLINK_TOKEN=uplc_...")
 	}
 
 	home, err := homeDir()
@@ -58,7 +70,7 @@ func runCrew(ctx context.Context, args []string) error {
 		dir = filepath.Join(home, "crew")
 	}
 
-	logf := logger("crew")
+	logf := warn
 	c, err := crew.New(crew.Config{
 		Name:              *name,
 		Roles:             roles,

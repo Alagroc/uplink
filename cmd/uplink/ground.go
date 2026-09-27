@@ -52,6 +52,11 @@ func runGround(ctx context.Context, args []string) error {
 	}
 	defer st.Close()
 
+	crewTokens, err := ground.OpenCrewTokens(filepath.Join(dir, "crew-tokens.json"))
+	if err != nil {
+		return err
+	}
+
 	logf := logger("ground")
 	g := ground.New(st, ground.Options{
 		OfflineAfter: *offlineAfter,
@@ -61,11 +66,12 @@ func runGround(ctx context.Context, args []string) error {
 
 	stopped := make(chan string, 1)
 	srv := &ground.Server{
-		Ground:  g,
-		Token:   token,
-		Version: Version,
-		Debug:   *debug,
-		Logf:    logf,
+		Ground:     g,
+		Token:      token,
+		Version:    Version,
+		CrewTokens: crewTokens,
+		Debug:      *debug,
+		Logf:       logf,
 		RequestShutdown: func(reason string) {
 			select {
 			case stopped <- reason:
@@ -84,6 +90,10 @@ func runGround(ctx context.Context, args []string) error {
 	}
 
 	printGroundBanner(ln.Addr().String(), dir)
+	if crewTokens.Count() == 0 {
+		fmt.Fprintf(os.Stderr, "[ground] no crew tokens yet — mint one before starting a crew:\n")
+		fmt.Fprintf(os.Stderr, "[ground]   %s crew-token add devbox --role builder\n", selfName())
+	}
 
 	errCh := make(chan error, 1)
 	go func() {

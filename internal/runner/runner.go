@@ -242,10 +242,16 @@ func Build(spec Spec, o Options) (*Built, error) {
 
 	needsConfig := spec.MCPStyle == StyleFlag
 	if needsConfig {
-		if err := os.MkdirAll(o.ConfigDir, 0o700); err != nil {
+		// The agent runs with its own working directory, so a relative config
+		// path would resolve somewhere it does not exist.
+		configDir, err := filepath.Abs(o.ConfigDir)
+		if err != nil {
 			return nil, err
 		}
-		f, err := os.CreateTemp(o.ConfigDir, "mcp-*.json")
+		if err := os.MkdirAll(configDir, 0o700); err != nil {
+			return nil, err
+		}
+		f, err := os.CreateTemp(configDir, "mcp-*.json")
 		if err != nil {
 			return nil, err
 		}

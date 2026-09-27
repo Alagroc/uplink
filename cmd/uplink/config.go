@@ -11,9 +11,17 @@ import (
 )
 
 // homeDir is where uplink keeps its token, event log and transcripts.
+//
+// Always absolute. Paths derived from here end up inside generated config files
+// that other processes read from their own working directory — a relative
+// UPLINK_HOME would produce an MCP config the agent cannot find.
 func homeDir() (string, error) {
 	if dir := os.Getenv("UPLINK_HOME"); dir != "" {
-		return dir, nil
+		abs, err := filepath.Abs(dir)
+		if err != nil {
+			return "", fmt.Errorf("resolve UPLINK_HOME %q: %w", dir, err)
+		}
+		return abs, nil
 	}
 	home, err := os.UserHomeDir()
 	if err != nil {

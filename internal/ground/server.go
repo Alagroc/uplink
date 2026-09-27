@@ -26,6 +26,10 @@ type Server struct {
 	// caller learns the outcome before the process goes away.
 	RequestShutdown func(reason string)
 
+	// CrewTokens holds the per-crew credentials. Crew endpoints are closed
+	// without it.
+	CrewTokens *CrewTokenStore
+
 	// Debug logs one line per request through Logf. Off by default: it buffers
 	// request bodies to describe them.
 	Debug bool
@@ -50,8 +54,8 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("/mcp", &mcp.HTTPHandler{
 		Server: operator,
 		Authorize: func(r *http.Request) (*http.Request, error) {
-			if !s.validOperator(r) {
-				return nil, fmt.Errorf("invalid or missing operator token")
+			if err := s.operatorAuthError(r); err != nil {
+				return nil, err
 			}
 			return r, nil
 		},
@@ -70,11 +74,11 @@ func (s *Server) Handler() http.Handler {
 		},
 	})
 
-	mux.HandleFunc("/v1/crew/register", s.crewOnly(s.handleRegister))
-	mux.HandleFunc("/v1/crew/poll", s.crewOnly(s.handlePoll))
-	mux.HandleFunc("/v1/crew/logs", s.crewOnly(s.handleLogs))
-	mux.HandleFunc("/v1/crew/state", s.crewOnly(s.handleState))
-	mux.HandleFunc("/v1/shutdown", s.crewOnly(s.handleShutdown))
+	mux.HandleFunc("/v1/crew/register", s.crewAuth(s.handleRegister))
+	mux.HandleFunc("/v1/crew/poll", s.crewAuth(s.handlePoll))
+	mux.HandleFunc("/v1/crew/logs", s.crewAuth(s.handleLogs))
+	mux.HandleFunc("/v1/crew/state", s.crewAuth(s.handleState))
+	mux.HandleFunc("/v1/shutdown", s.operatorOnly(s.handleShutdown))
 	mux.HandleFunc("/v1/health", s.handleHealth)
 
 	if s.Debug {
@@ -90,20 +94,106 @@ func (s *Server) validOperator(r *http.Request) bool {
 	return subtle.ConstantTimeCompare([]byte(got), []byte(s.Token)) == 1
 }
 
-func (s *Server) crewOnly(h func(http.ResponseWriter, *http.Request)) http.HandlerFunc {
+// operatorAuthError validates the operator credential, naming the most likely
+// mistake now that crew have their own.
+func (s *Server) operatorAuthError(r *http.Request) error {
+	if s.validOperator(r) {
+		return nil
+	}
+	if IsCrewToken(mcp.BearerToken(r)) {
+		return fmt.Errorf("that is a crew token; this endpoint needs the operator token")
+	}
+	return fmt.Errorf("invalid or missing operator token")
+}
+
+// operatorOnly guards the surfaces that can dispatch work and stop the daemon.
+func (s *Server) operatorOnly(h func(http.ResponseWriter, *http.Request)) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodPost {
-			w.Header().Set("Allow", "POST")
-			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		if !requirePost(w, r) {
 			return
 		}
-		if !s.validOperator(r) {
-			w.Header().Set("WWW-Authenticate", `Bearer realm="uplink"`)
-			http.Error(w, "invalid or missing token", http.StatusUnauthorized)
+		if err := s.operatorAuthError(r); err != nil {
+			unauthorized(w, err.Error())
 			return
 		}
 		h(w, r)
 	}
+}
+
+// crewAuth authenticates a crew and hands its credential to the handler.
+//
+// This is the credential split: a crew token opens only these endpoints, and
+// only for the one crew name it was minted for. Before this existed, every crew
+// held the operator token and could dispatch jobs to other crew, read the whole
+// inbox, poll another crew's queue, and shut ground down.
+func (s *Server) crewAuth(h func(http.ResponseWriter, *http.Request, *CrewToken)) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if !requirePost(w, r) {
+			return
+		}
+		presented := mcp.BearerToken(r)
+		if presented == "" {
+			unauthorized(w, "no token: set UPLINK_TOKEN on this crew host to a token from `uplink crew-token add <name>`")
+			return
+		}
+		if s.CrewTokens == nil {
+			unauthorized(w, "this ground has no crew token store configured")
+			return
+		}
+
+		token, ok := s.CrewTokens.Lookup(presented)
+		if !ok {
+			// The most likely mistake, now that the two are different.
+			if subtle.ConstantTimeCompare([]byte(presented), []byte(s.Token)) == 1 {
+				unauthorized(w, "the operator token no longer works for crew. Mint a crew credential on the ground machine:\n"+
+					"  uplink crew-token add <name> --role <role>\n"+
+					"then set UPLINK_TOKEN to it on this host")
+				return
+			}
+			if s.CrewTokens.Count() == 0 {
+				unauthorized(w, "no crew tokens have been minted yet; on the ground machine run: uplink crew-token add <name>")
+				return
+			}
+			unauthorized(w, "unrecognised crew token")
+			return
+		}
+		if token.Revoked() {
+			unauthorized(w, fmt.Sprintf("the token for crew %q was revoked at %s", token.Name, token.RevokedAt.Format(time.RFC3339)))
+			return
+		}
+		h(w, r, token)
+	}
+}
+
+func requirePost(w http.ResponseWriter, r *http.Request) bool {
+	if r.Method != http.MethodPost {
+		w.Header().Set("Allow", "POST")
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return false
+	}
+	return true
+}
+
+func unauthorized(w http.ResponseWriter, reason string) {
+	w.Header().Set("WWW-Authenticate", `Bearer realm="uplink"`)
+	http.Error(w, reason, http.StatusUnauthorized)
+}
+
+// ownedBy reports whether a crew_id from a request body belongs to the
+// authenticated crew. Without this a crew could poll another crew's queue and
+// take its jobs, agent tokens included.
+func (s *Server) ownedBy(crewID string, token *CrewToken) error {
+	if crewID == "" {
+		return fmt.Errorf("crew_id is required")
+	}
+	name, ok := s.Ground.CrewName(crewID)
+	if !ok {
+		return fmt.Errorf("unknown crew %q: re-register", crewID)
+	}
+	if name != token.Name {
+		return fmt.Errorf("crew %q does not belong to this token", name)
+	}
+	return nil
 }
 
 func decode(w http.ResponseWriter, r *http.Request, dst any) error {
@@ -125,11 +215,21 @@ func fail(w http.ResponseWriter, status int, err error) {
 	respond(w, status, map[string]string{"error": err.Error()})
 }
 
-func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
+func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request, token *CrewToken) {
 	var req proto.RegisterReq
 	if err := decode(w, r, &req); err != nil {
 		fail(w, http.StatusBadRequest, err)
 		return
+	}
+	// The token names the crew, so a stolen credential cannot masquerade as a
+	// different one.
+	if req.Name != token.Name {
+		fail(w, http.StatusForbidden, fmt.Errorf("this token is for crew %q, not %q", token.Name, req.Name))
+		return
+	}
+	// Roles on the token are authoritative when present.
+	if len(token.Roles) > 0 {
+		req.Roles = token.Roles
 	}
 	if req.Version != "" && req.Version != proto.Version {
 		fail(w, http.StatusConflict, fmt.Errorf("crew speaks protocol %s, ground speaks %s: upgrade the crew binary", req.Version, proto.Version))
@@ -143,10 +243,14 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 	respond(w, http.StatusOK, resp)
 }
 
-func (s *Server) handlePoll(w http.ResponseWriter, r *http.Request) {
+func (s *Server) handlePoll(w http.ResponseWriter, r *http.Request, token *CrewToken) {
 	var req proto.PollReq
 	if err := decode(w, r, &req); err != nil {
 		fail(w, http.StatusBadRequest, err)
+		return
+	}
+	if err := s.ownedBy(req.CrewID, token); err != nil {
+		fail(w, http.StatusForbidden, err)
 		return
 	}
 	wait := time.Duration(req.WaitMS) * time.Millisecond
@@ -169,10 +273,14 @@ func (s *Server) handlePoll(w http.ResponseWriter, r *http.Request) {
 	respond(w, http.StatusOK, cmd)
 }
 
-func (s *Server) handleLogs(w http.ResponseWriter, r *http.Request) {
+func (s *Server) handleLogs(w http.ResponseWriter, r *http.Request, token *CrewToken) {
 	var req proto.LogsReq
 	if err := decode(w, r, &req); err != nil {
 		fail(w, http.StatusBadRequest, err)
+		return
+	}
+	if err := s.ownedBy(req.CrewID, token); err != nil {
+		fail(w, http.StatusForbidden, err)
 		return
 	}
 	next, err := s.Ground.AppendLogs(req.CrewID, req.JobID, req.Lines)
@@ -183,10 +291,14 @@ func (s *Server) handleLogs(w http.ResponseWriter, r *http.Request) {
 	respond(w, http.StatusOK, map[string]int64{"next_seq": next})
 }
 
-func (s *Server) handleState(w http.ResponseWriter, r *http.Request) {
+func (s *Server) handleState(w http.ResponseWriter, r *http.Request, token *CrewToken) {
 	var req proto.JobStateReq
 	if err := decode(w, r, &req); err != nil {
 		fail(w, http.StatusBadRequest, err)
+		return
+	}
+	if err := s.ownedBy(req.CrewID, token); err != nil {
+		fail(w, http.StatusForbidden, err)
 		return
 	}
 	if err := s.Ground.SetJobState(req.CrewID, req); err != nil {

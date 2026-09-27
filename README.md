@@ -52,9 +52,10 @@ uplink init
 # 2. mission control, in its own terminal
 uplink ground
 
-# 3. a worker, in another shell, pointed at a directory it may work in
-export UPLINK_TOKEN=$(uplink token)
-uplink crew --name devbox --role builder --workdir ~/projects/myapp
+# 3. a credential for that worker, then the worker itself in another shell
+uplink crew-token add devbox --role builder      # prints uplc_...
+export UPLINK_TOKEN=uplc_...
+uplink crew --name devbox --workdir ~/projects/myapp
 
 # 4. check it from the shell, without an LLM in the loop
 uplink call list_crew
@@ -83,12 +84,12 @@ inbound ports beyond SSH.
 ```sh
 uplink init                        # creates ~/.uplink/token, prints your next steps
 uplink ground                      # listens on 127.0.0.1:8765
-uplink token                       # copy this; the crew needs it
+uplink crew-token add devbox --role builder    # copy this; the crew needs it
 ```
 
-Run `init` **only** on the machine that runs ground. A crew host takes that same
-token; if you init there too it will generate a different one and fail to
-authenticate.
+Run `init` **only** on the machine that runs ground. A crew host takes a crew
+token instead; running `init` there would generate an unrelated operator token
+that authenticates against nothing.
 
 ### 2. Open a reverse tunnel from the laptop
 
@@ -116,8 +117,8 @@ docker run --network host -it -v /work:/work myimage
 Inside it, after you have installed and authenticated your agent CLI:
 
 ```sh
-export UPLINK_TOKEN=<the token from step 1>
-uplink crew --name devbox --role builder --workdir /work/myapp
+export UPLINK_TOKEN=<the crew token minted in step 1>
+uplink crew --name devbox --workdir /work/myapp
 ```
 
 It should print `registered with ground as "devbox"; runners: claude`.
@@ -362,10 +363,19 @@ Crew advertise roles, and jobs can target a role instead of a name. One crew per
 container, several containers per host:
 
 ```sh
-uplink crew --name impl-1  --role implementer --workdir /work/myapp
-uplink crew --name review-1 --role reviewer   --workdir /work/myapp
-uplink crew --name docs-1   --role documenter --workdir /work/myapp
+# one credential per workload, minted on the ground machine
+uplink crew-token add impl-1   --role implementer
+uplink crew-token add review-1 --role reviewer
+uplink crew-token add docs-1   --role documenter
+
+# then on each host, with its own token in UPLINK_TOKEN
+uplink crew --name impl-1   --workdir /work/myapp
+uplink crew --name review-1 --workdir /work/myapp
+uplink crew --name docs-1   --workdir /work/myapp
 ```
+
+Because roles ride on the token, a crew cannot promote itself into a role you
+did not grant, and revoking one workload does not disturb the others.
 
 Then from your laptop: *"send the migration to an implementer, and when it is
 done have a reviewer check the diff."* Your local model dispatches by role, and
@@ -422,6 +432,40 @@ For what an individual job did, prefer `job_logs`; for a full history including
 what was condensed away, read the crew's raw transcript at
 `~/.uplink/crew/transcripts/<job_id>.jsonl`.
 
+## Crew credentials
+
+Each crew gets its own token, minted on the machine that runs ground:
+
+```sh
+uplink crew-token add devbox --role builder     # prints uplc_... once
+uplink crew-token list
+uplink crew-token revoke devbox                 # effective on that crew's next request
+```
+
+Only the hash is stored, in `~/.uplink/ground/crew-tokens.json` (0600), so a
+token cannot be recovered — mint a replacement instead. These commands edit that
+file directly, so they work whether or not ground is running, and ground picks
+up a change on its next crew authentication. No restart, either way.
+
+A crew token is bound to one crew name and opens only the crew endpoints. It
+cannot dispatch jobs, read the inbox, reply to an agent, or stop ground. If the
+token carries roles, they are authoritative: a crew cannot claim a role it was
+not granted.
+
+On the crew host:
+
+```sh
+export UPLINK_TOKEN=uplc_...         # or UPLINK_CREW_TOKEN, which takes precedence
+uplink crew --name devbox --workdir /work/yourapp
+```
+
+`UPLINK_CREW_TOKEN` exists so a machine that is both operator and crew — a
+testing box — can hold both credentials at once.
+
+**Migrating an existing setup:** the operator token no longer works for crew.
+Mint a token per crew and replace `UPLINK_TOKEN` on those hosts. The operator
+token is unchanged and still drives `capcom`, `call` and `shutdown`.
+
 ## Security
 
 uplink executes commands on remote machines. That is the feature, so the
@@ -433,11 +477,12 @@ boundaries are deliberate:
   never a flag — `ps` is readable by every user on the box. Compared in constant
   time. Where a runner can only be configured on the command line (Codex), the
   token goes to a `0600` file and only its path appears in argv.
-- **Separate credentials per direction.** The operator token opens `/mcp`. Each
-  job gets its own token, minted at dispatch, that opens only `/mcp/agent` and
-  only for that job, and is retired when the job ends. The operator token is
-  stripped from the environment of every process a job starts, so an agent
-  cannot simply read it and dispatch jobs of its own.
+- **Three credentials, each scoped to one surface.** The operator token opens
+  `/mcp` and `/v1/shutdown` and stays on the ground machine. Each crew gets its
+  own token, scoped to the crew endpoints and bound to one crew name. Each job
+  gets its own, opening only `/mcp/agent` for that job and retired when it ends.
+  The operator token is stripped from the environment of every process a job
+  starts.
 - **A workdir default, not a sandbox.** A crew refuses any job whose `workdir`
   resolves outside `--workdir`, symlinks included. Treat that as a guardrail
   against a careless path, not a boundary: an `exec` job runs a real shell, so
@@ -453,15 +498,21 @@ the confinement has to come from the container, not the flag. Run crew inside a
 container, mount only what the job needs, and give it credentials scoped to the
 job. If you want the prompts back, override the runner spec (below).
 
-Two limits worth knowing:
+Limits worth knowing:
 
-- Crew authenticate with the same token as the operator, so a machine you give
-  crew access to can also act as an operator.
-- Stripping `UPLINK_TOKEN` from child processes closes the easy path, not the
-  class: an agent runs as the same user as the crew and can still read
-  `~/.uplink/token` if that file exists on the crew host. On a devbox, prefer
-  passing the token through the environment only (`export UPLINK_TOKEN=...`)
-  rather than copying the token file over.
+- An agent runs as the same user as its crew, so it can read that crew's token
+  out of the environment and impersonate **that crew**. Since a crew token only
+  reaches the crew endpoints, and only as itself, this buys it nothing beyond
+  the job it is already running.
+- Revocation takes effect on that crew's next request, so up to one poll
+  interval (25s by default). A job already running on a revoked crew keeps
+  running locally, but can no longer report logs or its result — cancel it from
+  the operator side.
+- **TODO, not done here:** agent jobs still launch the remote CLI with its
+  permission prompts disabled, so the container remains the only confinement.
+  The next security step is to run agents with normal permissions and route
+  anything they would be denied into `ask_operator`, so you approve risky steps
+  instead of pre-approving everything. Tracked in the handover notes.
 
 ## Customising how agents are launched
 
@@ -505,8 +556,14 @@ something else on that port is a different problem from a second uplink.
 **`cannot reach ground`** — the tunnel is down or landed on the wrong interface.
 Check with `curl -s http://127.0.0.1:8765/v1/health` on the crew host.
 
-**`no token found`** — set `UPLINK_TOKEN` on the crew host. Ground creates the
-token on first run; crew never does.
+**`no token found`** — set `UPLINK_TOKEN` on the crew host to a crew token from
+`uplink crew-token add <name>`.
+
+**`the operator token no longer works for crew`** — exactly what it says: mint a
+crew token and use that instead.
+
+**`this token is for crew "x", not "y"`** — the `--name` does not match the token.
+Use the name it was minted for, or mint one for this name.
 
 **`runners: none found`** — no agent CLI on the crew's `PATH`, so only `exec`
 jobs will work. Install one, or point a runner spec at it.
@@ -524,7 +581,7 @@ deciding for themselves; naming the decisions that are yours makes them escalate
 ## Layout
 
 ```
-cmd/uplink/        CLI: init, ground, shutdown, crew, capcom, radio, call, token
+cmd/uplink/        CLI: init, ground, shutdown, crew, capcom, radio, call, token, crew-token
 internal/mcp/      MCP over stdio and streamable HTTP
 internal/ground/   hub: crew registry, jobs, inbox, the tool surface
 internal/crew/     worker: poll loop, job execution, log shipping

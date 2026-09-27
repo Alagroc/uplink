@@ -117,6 +117,40 @@ func TestBuildClaudeWritesMCPConfig(t *testing.T) {
 
 // The job token is a credential: it must never appear in argv, which is
 // readable by any process on the host via ps.
+// The generated config path must be absolute. The agent runs with its own
+// working directory, so a relative path resolves somewhere it does not exist —
+// which surfaces as "MCP config file not found" and a dead agent job.
+func TestGeneratedConfigPathIsAbsolute(t *testing.T) {
+	fakeBin(t, "claude")
+	dir := t.TempDir()
+	t.Chdir(dir)
+
+	o := testOptions(t)
+	o.ConfigDir = "relative/state/mcp" // as a relative UPLINK_HOME would produce
+	o.Workdir = dir
+
+	built, err := Build(Defaults()["claude"], o)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer built.Cleanup()
+
+	for i, a := range built.Cmd.Args {
+		if a != "--mcp-config" || i+1 >= len(built.Cmd.Args) {
+			continue
+		}
+		path := built.Cmd.Args[i+1]
+		if !filepath.IsAbs(path) {
+			t.Fatalf("mcp config path is relative (%q); the agent would not find it", path)
+		}
+		if _, err := os.Stat(path); err != nil {
+			t.Errorf("config file not written where the args point: %v", err)
+		}
+		return
+	}
+	t.Fatal("no --mcp-config in args")
+}
+
 func TestJobTokenNeverAppearsInArgv(t *testing.T) {
 	for _, name := range []string{"claude", "cursor-agent"} {
 		fakeBin(t, name)

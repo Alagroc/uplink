@@ -34,7 +34,8 @@ Commands:
   capcom    stdio MCP bridge for your local AI CLI (claude/codex/cursor-agent).
   radio     stdio MCP bridge a remote agent uses to reach the operator.
   call      Invoke one operator tool from the shell. Useful for testing.
-  token     Print the operator token (needed by crew and capcom).
+  token     Print the operator token (needed by capcom, call and shutdown).
+  crew-token  Mint, list and revoke the per-crew credentials.
   version   Print the version.
 
 Run "uplink <command> -h" for the flags of each command.
@@ -75,6 +76,8 @@ func main() {
 		err = runCall(ctx, os.Args[2:])
 	case "token":
 		err = runToken(os.Args[2:])
+	case "crew-token":
+		err = runCrewToken(os.Args[2:])
 	case "version", "--version", "-v":
 		fmt.Println("uplink " + Version)
 	case "help", "-h", "--help":
