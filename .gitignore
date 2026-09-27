@@ -1,0 +1,16 @@
+# Build output
+/bin/
+/dist/
+/uplink
+
+# Local runtime state: tokens, audit logs, agent transcripts
+/.uplink/
+*.token
+events.jsonl
+logs.jsonl
+
+# Editor / OS
+.DS_Store
+*.swp
+.idea/
+.vscode/
