@@ -25,6 +25,7 @@ cross:
 	GOOS=linux  GOARCH=amd64 CGO_ENABLED=0 go build -ldflags "$(LDFLAGS)" -o dist/uplink-linux-amd64  $(PKG)
 	GOOS=linux  GOARCH=arm64 CGO_ENABLED=0 go build -ldflags "$(LDFLAGS)" -o dist/uplink-linux-arm64  $(PKG)
 	GOOS=darwin GOARCH=arm64 CGO_ENABLED=0 go build -ldflags "$(LDFLAGS)" -o dist/uplink-darwin-arm64 $(PKG)
+	GOOS=darwin GOARCH=amd64 CGO_ENABLED=0 go build -ldflags "$(LDFLAGS)" -o dist/uplink-darwin-amd64 $(PKG)
 	@ls -lh dist/
 
 install: build
