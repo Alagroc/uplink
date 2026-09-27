@@ -27,6 +27,7 @@ const usage = `uplink — talk to AI agents running on other machines.
 Usage: uplink <command> [flags]
 
 Commands:
+  init      Prepare this machine as the operator: create its token, print next steps.
   ground    Run mission control (the hub). Start this on your laptop.
   crew      Run a worker on a remote machine; connects out to ground.
   capcom    stdio MCP bridge for your local AI CLI (claude/codex/cursor-agent).
@@ -39,6 +40,7 @@ Run "uplink <command> -h" for the flags of each command.
 
 Quick start:
   # on your laptop
+  uplink init
   uplink ground
   # on the remote host, with the tunnel up and UPLINK_TOKEN set
   uplink crew --name devbox --role builder --ground http://127.0.0.1:8765
@@ -56,6 +58,8 @@ func main() {
 
 	var err error
 	switch os.Args[1] {
+	case "init":
+		err = runInit(os.Args[2:])
 	case "ground":
 		err = runGround(ctx, os.Args[2:])
 	case "crew":

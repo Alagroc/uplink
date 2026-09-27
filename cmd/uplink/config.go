@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 )
@@ -64,7 +65,7 @@ func loadToken(explicitFile string, createIfMissing bool) (string, error) {
 		// `uplink token` on a crew host would mint a token that does not match
 		// ground's, and the resulting 401s are a confusing way to find out.
 		return "", fmt.Errorf("no token found at %s.\n"+
-			"  On the machine running ground:  uplink token --create   (or just start uplink ground)\n"+
+			"  On the machine running ground:  uplink init\n"+
 			"  On a crew host:                 export UPLINK_TOKEN=<the token from the ground machine>",
 			path)
 	}
@@ -108,3 +109,6 @@ func groundURL(flagValue string) string {
 	}
 	return "http://127.0.0.1:8765"
 }
+
+// execLookPath reports whether a binary is reachable on PATH.
+func execLookPath(name string) (string, error) { return exec.LookPath(name) }

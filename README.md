@@ -45,18 +45,27 @@ Or plainly: `go build -o bin/uplink ./cmd/uplink`.
 ## Quick start, all on one machine
 
 ```sh
-# 1. mission control. Writes ~/.uplink/token on first run.
+# 1. set this machine up as the operator. Creates ~/.uplink/token and prints
+#    the next steps, tailored to where you installed the binary.
+uplink init
+
+# 2. mission control, in its own terminal
 uplink ground
 
-# 2. a worker, in another shell, pointed at a directory it may work in
+# 3. a worker, in another shell, pointed at a directory it may work in
 export UPLINK_TOKEN=$(uplink token)
 uplink crew --name devbox --role builder --workdir ~/projects/myapp
 
-# 3. check it from the shell, without an LLM in the loop
+# 4. check it from the shell, without an LLM in the loop
 uplink call list_crew
 uplink call submit_job '{"kind":"exec","crew":"devbox","command":"uname -a"}'
 uplink call job_logs '{"job_id":"job_..."}'
 ```
+
+`uplink init` is worth running first even though `ground` would create the token
+by itself: it is idempotent, it tells you which agent CLIs it can see on this
+machine, and it prints the exact `claude mcp add` and `ssh -R` lines for your
+install, so the rest of this README is mostly confirmation.
 
 Then point your AI CLI at it — see [Wiring up your CLI](#wiring-up-your-cli).
 
@@ -69,9 +78,14 @@ inbound ports beyond SSH.
 ### 1. On the laptop
 
 ```sh
+uplink init                        # creates ~/.uplink/token, prints your next steps
 uplink ground                      # listens on 127.0.0.1:8765
 uplink token                       # copy this; the crew needs it
 ```
+
+Run `init` **only** on the machine that runs ground. A crew host takes that same
+token; if you init there too it will generate a different one and fail to
+authenticate.
 
 ### 2. Open a reverse tunnel from the laptop
 
@@ -469,7 +483,7 @@ deciding for themselves; naming the decisions that are yours makes them escalate
 ## Layout
 
 ```
-cmd/uplink/        CLI: ground, crew, capcom, radio, call, token
+cmd/uplink/        CLI: init, ground, crew, capcom, radio, call, token
 internal/mcp/      MCP over stdio and streamable HTTP
 internal/ground/   hub: crew registry, jobs, inbox, the tool surface
 internal/crew/     worker: poll loop, job execution, log shipping

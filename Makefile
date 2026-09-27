@@ -13,7 +13,11 @@ test:
 
 vet:
 	go vet ./...
-	gofmt -l . | tee /dev/stderr | (! read)
+	@unformatted=$$(gofmt -l .); \
+	if [ -n "$$unformatted" ]; then \
+		echo "gofmt needed:"; echo "$$unformatted"; exit 1; \
+	fi
+	@echo "vet + gofmt clean"
 
 fmt:
 	gofmt -w .
