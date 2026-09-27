@@ -235,6 +235,13 @@ func (g *Ground) crewNameLocked(crewID string) (string, bool) {
 	return entry.info.Name, true
 }
 
+// CrewName resolves a crew id to the name the operator knows it by.
+func (g *Ground) CrewName(crewID string) (string, bool) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	return g.crewNameLocked(crewID)
+}
+
 // ownsJobLocked reports whether a crew may report on a job.
 //
 // Ownership is by crew NAME, not id. A crew that reconnects is issued a new id

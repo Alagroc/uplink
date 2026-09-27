@@ -393,6 +393,35 @@ uplink ground --notify 'osascript -e "display notification \"$UPLINK_QUESTION\" 
 `UPLINK_URGENCY` are in the command's environment. You glance over and tell your
 local session to check the inbox.
 
+## Watching what it is doing
+
+`uplink ground --debug` logs one line per request — what was asked, by which
+crew, the status and how long it took:
+
+```
+  POST /v1/crew/register crew=devbox runners=claude             200    0.1ms   57B
+  POST /mcp             tools/call submit_job                   200    0.2ms  168B
+  POST /v1/crew/poll    crew=devbox                             200    3.00s  298B
+  POST /v1/crew/state   crew=devbox job_fbd1e80e -> running     200    0.0ms   14B
+  POST /v1/crew/logs    crew=devbox job_fbd1e80e 3 lines        200    0.2ms   15B
+! POST /mcp             tools/list                              401    0.0ms   34B
+```
+
+Lines are described in uplink's vocabulary rather than HTTP's: MCP calls name
+the tool, crew calls name the crew and job. Anything that failed is marked `!`,
+so a wrong token or a crew that needs to re-register stands out.
+
+Long `/v1/crew/poll` durations are normal — that is the long-poll waiting, and
+it doubles as the crew heartbeat.
+
+Debug mode never logs headers. The operator token and every per-job token
+travel in `Authorization`, and a debug flag that printed your credentials into
+terminal scrollback would be a poor trade for visibility.
+
+For what an individual job did, prefer `job_logs`; for a full history including
+what was condensed away, read the crew's raw transcript at
+`~/.uplink/crew/transcripts/<job_id>.jsonl`.
+
 ## Security
 
 uplink executes commands on remote machines. That is the feature, so the

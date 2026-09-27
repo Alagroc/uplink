@@ -25,6 +25,11 @@ type Server struct {
 	// is accepted. It runs after the response has been handed back, so the
 	// caller learns the outcome before the process goes away.
 	RequestShutdown func(reason string)
+
+	// Debug logs one line per request through Logf. Off by default: it buffers
+	// request bodies to describe them.
+	Debug bool
+	Logf  func(format string, args ...any)
 }
 
 // Handler builds the mux. Two MCP endpoints with different credentials:
@@ -72,6 +77,9 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/v1/shutdown", s.crewOnly(s.handleShutdown))
 	mux.HandleFunc("/v1/health", s.handleHealth)
 
+	if s.Debug {
+		return s.debugMiddleware(mux)
+	}
 	return mux
 }
 
@@ -147,6 +155,13 @@ func (s *Server) handlePoll(w http.ResponseWriter, r *http.Request) {
 	}
 	cmd, err := s.Ground.Poll(r.Context(), req.CrewID, wait)
 	if err != nil {
+		if r.Context().Err() != nil {
+			// The crew hung up mid-poll, which is ordinary: it restarted, or
+			// the tunnel dropped. Nobody is listening for a reply, and calling
+			// it a conflict would tell the next reader to look for a problem
+			// that is not there.
+			return
+		}
 		// 409 tells the crew to re-register rather than retry blindly.
 		fail(w, http.StatusConflict, err)
 		return

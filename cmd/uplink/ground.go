@@ -23,6 +23,7 @@ func runGround(ctx context.Context, args []string) error {
 	tokenFile := fs.String("token-file", "", "token file (default ~/.uplink/token, created if missing)")
 	notify := fs.String("notify", "", "shell command run when an agent asks a question; UPLINK_CREW, UPLINK_QUESTION and UPLINK_QUESTION_ID are in its environment. The question text is written by an agent, so quote it (\"$UPLINK_QUESTION\") in your command")
 	bell := fs.Bool("bell", true, "ring the terminal bell when an agent asks a question")
+	debug := fs.Bool("debug", false, "log every request: what was asked, by which crew, the status and how long it took")
 	offlineAfter := fs.Duration("offline-after", 90*time.Second, "mark a crew offline after this long without a poll")
 	if err := fs.Parse(args); err != nil {
 		return err
@@ -63,6 +64,8 @@ func runGround(ctx context.Context, args []string) error {
 		Ground:  g,
 		Token:   token,
 		Version: Version,
+		Debug:   *debug,
+		Logf:    logf,
 		RequestShutdown: func(reason string) {
 			select {
 			case stopped <- reason:
