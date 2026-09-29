@@ -267,3 +267,90 @@ func TestExtractSSEData(t *testing.T) {
 		t.Error("an event stream with no data field should error")
 	}
 }
+
+// --- retry behaviour ---
+
+// flakyGround fails the first failUntil requests, then serves normally.
+func flakyGround(t *testing.T, failUntil int) (*httptest.Server, *int32Counter) {
+	t.Helper()
+	seen := &int32Counter{}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		seen.inc()
+		seen.mu.Lock()
+		n := seen.n
+		seen.mu.Unlock()
+		if n <= failUntil {
+			// Close without replying, as a restarting ground would.
+			hj, ok := w.(http.Hijacker)
+			if !ok {
+				http.Error(w, "boom", http.StatusInternalServerError)
+				return
+			}
+			conn, _, err := hj.Hijack()
+			if err == nil {
+				conn.Close()
+			}
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"jsonrpc":"2.0","id":1,"result":{"tools":[]}}`))
+	}))
+	t.Cleanup(srv.Close)
+	return srv, seen
+}
+
+// A tools/list that fails while ground restarts can leave the client believing
+// uplink offers no tools, which does not repair itself. One retry removes most
+// of that window.
+func TestReadOnlyCallsAreRetried(t *testing.T) {
+	srv, seen := flakyGround(t, 1)
+	b := &Bridge{Endpoint: srv.URL, Token: "t"}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	resp, err := b.forward(ctx, b.client(), json.RawMessage(`{"jsonrpc":"2.0","id":1,"method":"tools/list"}`))
+	if err != nil {
+		t.Fatalf("tools/list should have survived one failure: %v", err)
+	}
+	if !strings.Contains(string(resp), `"tools"`) {
+		t.Errorf("unexpected reply: %s", resp)
+	}
+	seen.mu.Lock()
+	defer seen.mu.Unlock()
+	if seen.n < 2 {
+		t.Errorf("expected a retry, saw %d attempts", seen.n)
+	}
+}
+
+// tools/call must never be retried: dispatching a job twice is worse than one
+// failed call.
+func TestToolCallsAreNotRetried(t *testing.T) {
+	srv, seen := flakyGround(t, 5)
+	b := &Bridge{Endpoint: srv.URL, Token: "t"}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	_, err := b.forward(ctx, b.client(), json.RawMessage(
+		`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"submit_job","arguments":{}}}`))
+	if err == nil {
+		t.Fatal("expected the failure to be reported, not retried away")
+	}
+	seen.mu.Lock()
+	defer seen.mu.Unlock()
+	if seen.n != 1 {
+		t.Errorf("submit_job was sent %d times; it must be sent at most once", seen.n)
+	}
+}
+
+func TestSafeToRetryCoversOnlyReads(t *testing.T) {
+	for _, method := range []string{"initialize", "tools/list", "ping", "prompts/list"} {
+		if !safeToRetry(json.RawMessage(`{"method":"` + method + `"}`)) {
+			t.Errorf("%s should be retryable", method)
+		}
+	}
+	for _, method := range []string{"tools/call", "notifications/initialized", "", "anything/else"} {
+		if safeToRetry(json.RawMessage(`{"method":"` + method + `"}`)) {
+			t.Errorf("%s must not be retried", method)
+		}
+	}
+}

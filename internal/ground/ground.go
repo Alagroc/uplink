@@ -72,6 +72,7 @@ type Ground struct {
 	qOrder    []string                   // question ids, oldest first
 	messages  map[string][]proto.Message // job id -> undelivered messages
 	inFlight  map[string][]proto.Message // job id -> handed out, not yet confirmed
+	jobWake   map[string]chan struct{}   // job id -> closed when something notable happens
 	finished  []string                   // finished job ids, oldest first
 
 	stderr func(string)
@@ -97,6 +98,7 @@ func New(st *store.Store, opts Options, stderr func(string)) *Ground {
 		questions: map[string]*questionEntry{},
 		messages:  map[string][]proto.Message{},
 		inFlight:  map[string][]proto.Message{},
+		jobWake:   map[string]chan struct{}{},
 		stderr:    stderr,
 	}
 	g.restore()
@@ -486,6 +488,86 @@ func (g *Ground) pruneFinishedLocked() {
 	}
 }
 
+// Reasons AwaitJob returns.
+const (
+	JobEventFinished = "finished"
+	JobEventQuestion = "question"
+	JobEventTimeout  = "timeout"
+)
+
+// jobWakeChanLocked returns the channel closed when this job next does
+// something worth waking a waiter for. Caller holds mu.
+func (g *Ground) jobWakeChanLocked(jobID string) chan struct{} {
+	ch, ok := g.jobWake[jobID]
+	if !ok {
+		ch = make(chan struct{})
+		g.jobWake[jobID] = ch
+	}
+	return ch
+}
+
+// signalJobLocked wakes everyone waiting on a job. Caller holds mu.
+func (g *Ground) signalJobLocked(jobID string) {
+	if ch, ok := g.jobWake[jobID]; ok {
+		close(ch)
+		delete(g.jobWake, jobID)
+	}
+}
+
+func (g *Ground) hasPendingQuestionLocked(jobID string) bool {
+	for _, id := range g.qOrder {
+		if entry := g.questions[id]; entry.q.JobID == jobID && entry.q.State == proto.QPending {
+			return true
+		}
+	}
+	return false
+}
+
+// AwaitJob blocks until the job finishes, its agent asks a question, or the
+// wait elapses.
+//
+// This exists so watching remote work does not mean polling it. A job that runs
+// for twenty minutes should cost one call that sleeps, not forty that each
+// re-read the same transcript.
+func (g *Ground) AwaitJob(ctx context.Context, jobID string, wait time.Duration) (string, error) {
+	deadline := time.Now().Add(wait)
+
+	for {
+		g.mu.Lock()
+		j, ok := g.jobs[jobID]
+		if !ok {
+			g.mu.Unlock()
+			return "", fmt.Errorf("unknown job %q", jobID)
+		}
+		if j.Terminal() {
+			g.mu.Unlock()
+			return JobEventFinished, nil
+		}
+		if g.hasPendingQuestionLocked(jobID) {
+			g.mu.Unlock()
+			return JobEventQuestion, nil
+		}
+		wake := g.jobWakeChanLocked(jobID)
+		g.mu.Unlock()
+
+		remaining := time.Until(deadline)
+		if remaining <= 0 {
+			return JobEventTimeout, nil
+		}
+		// Wait in slices so a dropped connection surfaces promptly rather than
+		// hanging on a socket nobody is reading.
+		timer := time.NewTimer(min(remaining, 30*time.Second))
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return "", ctx.Err()
+		case <-wake:
+			timer.Stop()
+		case <-timer.C:
+		}
+	}
+}
+
 // Job returns a copy of one job.
 func (g *Ground) Job(id string) (proto.Job, bool) {
 	g.mu.Lock()
@@ -575,6 +657,7 @@ func (g *Ground) SetJobState(crewID string, req proto.JobStateReq) error {
 		g.expireQuestionsLocked(j.ID, "job finished")
 		g.finished = append(g.finished, j.ID)
 		g.pruneFinishedLocked()
+		g.signalJobLocked(j.ID)
 	default:
 		return fmt.Errorf("invalid state %q", req.State)
 	}
@@ -624,6 +707,7 @@ func (g *Ground) Cancel(jobID, reason string) error {
 		j.Error = "crew offline: " + reason
 		g.persistJobLocked(j)
 		g.expireQuestionsLocked(jobID, "job cancelled")
+		g.signalJobLocked(jobID)
 		return nil
 	}
 	g.enqueue(entry, proto.Command{Type: proto.CmdCancel, JobID: jobID, Reason: reason})
@@ -698,6 +782,14 @@ func trimLogBuffer(buf []proto.LogLine) []proto.LogLine {
 	return buf
 }
 
+// LogPosition reports the next sequence number a job will use, so a caller can
+// tell whether there is new output without fetching any.
+func (g *Ground) LogPosition(jobID string) int64 {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	return g.logSeq[jobID]
+}
+
 // Logs returns buffered lines with Seq >= since, capped at limit.
 func (g *Ground) Logs(jobID string, since int64, limit int, stream string) ([]proto.LogLine, int64, error) {
 	g.mu.Lock()
@@ -750,6 +842,7 @@ func (g *Ground) Ask(job proto.Job, req proto.AskReq) (proto.Question, error) {
 	}
 	g.questions[q.ID] = &questionEntry{q: q, done: make(chan struct{})}
 	g.qOrder = append(g.qOrder, q.ID)
+	g.signalJobLocked(job.ID) // an operator waiting on this job needs to look now
 	_ = g.store.Append(store.KindQuestion, q)
 	g.store.Auditf("question %s from crew %q job %s: %s", q.ID, job.CrewName, job.ID, firstLine(req.Question))
 	g.mu.Unlock()

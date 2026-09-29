@@ -20,6 +20,11 @@ const OperatorInstructions = `uplink mission control. Your crew are AI agents an
 Dispatch work with submit_job (kind="agent" for an autonomous agent session, kind="exec" for a plain
 command). Jobs are asynchronous: submit_job returns immediately with a job_id.
 
+Then call await_job rather than polling. It blocks until the job finishes or its agent needs you, and
+returns the output produced while you waited. Repeated job_status/job_logs calls re-read a transcript
+that only grows; await_job costs one call and sleeps. When you do read logs directly, pass the
+since_seq the previous call reported so you get only what is new.
+
 A remote agent that needs a decision calls ask_operator and BLOCKS until you answer. Those questions
 appear in inbox() and are cleared with reply(). Nothing can interrupt you to announce a question, so
 check inbox() whenever you are waiting on remote work, and before you conclude that a job is stuck.
@@ -67,6 +72,21 @@ func (g *Ground) RegisterOperatorTools(s *mcp.Server) {
 			Required: []string{"kind"},
 		},
 		Handler: g.toolSubmitJob,
+	})
+
+	s.Add(mcp.Tool{
+		Name:        "await_job",
+		Description: "Wait for a job instead of polling it. Blocks until the job finishes or its agent asks you a question, whichever comes first, and returns the final status plus whatever output appeared while you waited. Use this rather than repeated job_status/job_logs calls: a twenty-minute job should cost one call that sleeps, not forty that each re-read the same transcript.",
+		Schema: mcp.Schema{
+			Props: map[string]mcp.Prop{
+				"job_id":    {Type: "string"},
+				"timeout_s": {Type: "integer", Description: "Give up waiting after this long and report progress so far (default 300, max 3600)", Default: 300},
+				"since_seq": {Type: "integer", Description: "Return only output at or after this sequence number. Pass the next_seq from your previous call.", Default: 0},
+				"log_limit": {Type: "integer", Description: "Max output lines to return (default 100)", Default: 100},
+			},
+			Required: []string{"job_id"},
+		},
+		Handler: g.toolAwaitJob,
 	})
 
 	s.Add(mcp.Tool{
@@ -205,6 +225,84 @@ func (g *Ground) toolSubmitJob(_ context.Context, raw json.RawMessage) (string, 
 	return fmt.Sprintf("job %s queued: kind=%s crew=%s\n%s", job.ID, job.Kind, job.CrewName, hint), nil
 }
 
+// maxAwait bounds a single wait. Longer than this and the caller should come
+// back rather than hold a connection open indefinitely.
+const maxAwait = time.Hour
+
+func (g *Ground) toolAwaitJob(ctx context.Context, raw json.RawMessage) (string, error) {
+	var a struct {
+		JobID    string `json:"job_id"`
+		TimeoutS int    `json:"timeout_s"`
+		SinceSeq int64  `json:"since_seq"`
+		LogLimit int    `json:"log_limit"`
+	}
+	if err := json.Unmarshal(raw, &a); err != nil {
+		return "", fmt.Errorf("bad arguments: %w", err)
+	}
+
+	wait := 300 * time.Second
+	if a.TimeoutS > 0 {
+		wait = time.Duration(a.TimeoutS) * time.Second
+	}
+	if wait > maxAwait {
+		wait = maxAwait
+	}
+	if a.LogLimit <= 0 {
+		a.LogLimit = 100
+	}
+
+	started := time.Now()
+	event, err := g.AwaitJob(ctx, a.JobID, wait)
+	if err != nil {
+		return "", err
+	}
+
+	job, ok := g.Job(a.JobID)
+	if !ok {
+		return "", fmt.Errorf("unknown job %q", a.JobID)
+	}
+	lines, next, err := g.Logs(a.JobID, a.SinceSeq, a.LogLimit, "")
+	if err != nil {
+		return "", err
+	}
+
+	var b strings.Builder
+	switch event {
+	case JobEventFinished:
+		fmt.Fprintf(&b, "Job finished after waiting %s.\n\n", time.Since(started).Round(time.Second))
+	case JobEventQuestion:
+		fmt.Fprintf(&b, "The agent is waiting on you after %s. Read inbox() and answer with reply().\n\n", time.Since(started).Round(time.Second))
+	default:
+		fmt.Fprintf(&b, "Still running after %s. Progress so far:\n\n", time.Since(started).Round(time.Second))
+	}
+
+	b.WriteString(formatJob(job, true, g.PeekMessages(job.ID), 0))
+	b.WriteString("\n\n")
+
+	if len(lines) == 0 {
+		fmt.Fprintf(&b, "No new output.\n")
+	} else {
+		fmt.Fprintf(&b, "Output since seq %d:\n", a.SinceSeq)
+		for _, ln := range lines {
+			prefix := ""
+			if ln.Stream != proto.StreamStdout {
+				prefix = "[" + ln.Stream + "] "
+			}
+			fmt.Fprintf(&b, "%s%s\n", prefix, ln.Text)
+		}
+	}
+
+	switch event {
+	case JobEventFinished:
+		fmt.Fprintf(&b, "\n--- next_seq=%d (job is %s; nothing more will arrive)", next, job.State)
+	case JobEventQuestion:
+		fmt.Fprintf(&b, "\n--- next_seq=%d — answer the question, then call await_job again with since_seq=%d", next, next)
+	default:
+		fmt.Fprintf(&b, "\n--- next_seq=%d — call await_job again with since_seq=%d to keep waiting", next, next)
+	}
+	return b.String(), nil
+}
+
 func (g *Ground) toolJobStatus(_ context.Context, raw json.RawMessage) (string, error) {
 	var a struct {
 		JobID string `json:"job_id"`
@@ -219,7 +317,7 @@ func (g *Ground) toolJobStatus(_ context.Context, raw json.RawMessage) (string, 
 		if !ok {
 			return "", fmt.Errorf("unknown job %q", a.JobID)
 		}
-		return formatJob(job, true, g.PeekMessages(job.ID)), nil
+		return formatJob(job, true, g.PeekMessages(job.ID), g.LogPosition(job.ID)), nil
 	}
 
 	limit := a.Limit
@@ -235,13 +333,13 @@ func (g *Ground) toolJobStatus(_ context.Context, raw json.RawMessage) (string, 
 	}
 	var b strings.Builder
 	for _, j := range jobs {
-		b.WriteString(formatJob(j, false, 0))
+		b.WriteString(formatJob(j, false, 0, 0))
 		b.WriteString("\n")
 	}
 	return strings.TrimRight(b.String(), "\n"), nil
 }
 
-func formatJob(j proto.Job, verbose bool, pendingMsgs int) string {
+func formatJob(j proto.Job, verbose bool, pendingMsgs int, logNext int64) string {
 	var b strings.Builder
 	label := j.Label
 	if label == "" {
@@ -278,6 +376,9 @@ func formatJob(j proto.Job, verbose bool, pendingMsgs int) string {
 	if pendingMsgs > 0 {
 		fmt.Fprintf(&b, "  %d operator message(s) not yet picked up by the agent\n", pendingMsgs)
 	}
+	if logNext > 0 {
+		fmt.Fprintf(&b, "  output: next_seq=%d\n", logNext)
+	}
 	return strings.TrimRight(b.String(), "\n")
 }
 
@@ -311,7 +412,14 @@ func (g *Ground) toolJobLogs(_ context.Context, raw json.RawMessage) (string, er
 		}
 		fmt.Fprintf(&b, "%s%s\n", prefix, ln.Text)
 	}
-	fmt.Fprintf(&b, "--- next_seq=%d", next)
+	// Spell out what the cursor is for: a bare number invites re-reading the
+	// whole transcript on the next call.
+	job, _ := g.Job(a.JobID)
+	if job.Terminal() {
+		fmt.Fprintf(&b, "--- next_seq=%d (job is %s; nothing more will arrive)", next, job.State)
+	} else {
+		fmt.Fprintf(&b, "--- next_seq=%d — pass since_seq=%d for only what is new, or await_job to wait for it", next, next)
+	}
 	return b.String(), nil
 }
 

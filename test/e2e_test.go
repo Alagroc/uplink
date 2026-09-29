@@ -302,6 +302,51 @@ func TestJobLogsTailIncrementally(t *testing.T) {
 	}
 }
 
+// await_job replaces polling: one call that sleeps until the job is done.
+func TestAwaitJobBlocksUntilTheJobFinishes(t *testing.T) {
+	h := startHarness(t)
+	jobID := h.submit(map[string]any{
+		"kind": "exec", "crew": "e2e",
+		"command": "echo starting; sleep 3; echo finished",
+	})
+
+	start := time.Now()
+	out := h.call("await_job", fmt.Sprintf(`{"job_id":%q,"timeout_s":60}`, jobID))
+	elapsed := time.Since(start)
+
+	if !strings.Contains(out, "Job finished") {
+		t.Fatalf("await_job did not report completion:\n%s", out)
+	}
+	// It must actually have waited, rather than returning a snapshot.
+	if elapsed < 2*time.Second {
+		t.Errorf("returned after %s; it should have blocked until the job ended", elapsed)
+	}
+	if elapsed > 30*time.Second {
+		t.Errorf("took %s; it should have woken on completion, not timed out", elapsed)
+	}
+	for _, want := range []string{"starting", "finished", "next_seq="} {
+		if !strings.Contains(out, want) {
+			t.Errorf("await_job output missing %q:\n%s", want, out)
+		}
+	}
+}
+
+// Waiting on work that is already over must return at once.
+func TestAwaitJobReturnsImmediatelyForAFinishedJob(t *testing.T) {
+	h := startHarness(t)
+	jobID := h.submit(map[string]any{"kind": "exec", "crew": "e2e", "command": "true"})
+	h.waitForState(jobID, 30*time.Second)
+
+	start := time.Now()
+	out := h.call("await_job", fmt.Sprintf(`{"job_id":%q,"timeout_s":60}`, jobID))
+	if elapsed := time.Since(start); elapsed > 5*time.Second {
+		t.Errorf("a finished job took %s to report", elapsed)
+	}
+	if !strings.Contains(out, "nothing more will arrive") {
+		t.Errorf("should say the job is over:\n%s", out)
+	}
+}
+
 func TestCancelStopsALongJob(t *testing.T) {
 	h := startHarness(t)
 	jobID := h.submit(map[string]any{"kind": "exec", "crew": "e2e", "command": "sleep 300"})
@@ -405,7 +450,7 @@ func TestCrewWithOperatorTokenIsRefused(t *testing.T) {
 func TestOperatorToolsAreAllAdvertised(t *testing.T) {
 	h := startHarness(t)
 	out := h.call("--tools")
-	for _, tool := range []string{"list_crew", "submit_job", "job_status", "job_logs", "cancel_job", "inbox", "reply", "send_message"} {
+	for _, tool := range []string{"list_crew", "submit_job", "await_job", "job_status", "job_logs", "cancel_job", "inbox", "reply", "send_message"} {
 		if !strings.Contains(out, tool) {
 			t.Errorf("tool %q is not advertised:\n%s", tool, out)
 		}

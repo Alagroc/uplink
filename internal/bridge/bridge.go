@@ -138,8 +138,63 @@ func (b *Bridge) Run(ctx context.Context, r io.Reader, w io.Writer, logf func(st
 	return nil
 }
 
-// forward POSTs one message and returns the raw reply, or nil when there is none.
+// retryableMethods can be re-sent safely: they only read. tools/call is
+// deliberately absent — dispatching a job twice is worse than one failed call.
+var retryableMethods = map[string]bool{
+	"initialize":               true,
+	"tools/list":               true,
+	"resources/list":           true,
+	"resources/templates/list": true,
+	"prompts/list":             true,
+	"ping":                     true,
+}
+
+// safeToRetry reports whether re-sending this message can have no second effect.
+func safeToRetry(msg json.RawMessage) bool {
+	var probe struct {
+		Method string `json:"method"`
+	}
+	if json.Unmarshal(msg, &probe) != nil {
+		return false
+	}
+	return retryableMethods[probe.Method]
+}
+
+// forward POSTs one message, retrying a read-only call that never reached
+// ground.
+//
+// A tools/list that fails because ground was restarting can leave the client
+// believing this server offers no tools, which does not repair itself — the
+// session then cannot call anything until it re-fetches schemas by hand. One
+// cheap retry removes most of that window.
 func (b *Bridge) forward(ctx context.Context, client *http.Client, msg json.RawMessage) (json.RawMessage, error) {
+	attempts := 1
+	if safeToRetry(msg) {
+		attempts = 3
+	}
+
+	var err error
+	var resp json.RawMessage
+	for attempt := range attempts {
+		if attempt > 0 {
+			select {
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			case <-time.After(time.Duration(attempt) * 150 * time.Millisecond):
+			}
+		}
+		resp, err = b.forwardOnce(ctx, client, msg)
+		if err == nil {
+			return resp, nil
+		}
+		if ctx.Err() != nil {
+			return nil, err
+		}
+	}
+	return nil, err
+}
+
+func (b *Bridge) forwardOnce(ctx context.Context, client *http.Client, msg json.RawMessage) (json.RawMessage, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, b.Endpoint, bytes.NewReader(msg))
 	if err != nil {
 		return nil, err

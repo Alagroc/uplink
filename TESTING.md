@@ -5,7 +5,7 @@ make test        # everything, with the race detector
 go test ./...    # faster, no race detector
 ```
 
-128 tests across 8 packages. All pass under `-race`.
+144 tests across 8 packages. All pass under `-race`.
 
 | Package | Tests | Covers |
 | --- | --- | --- |
@@ -13,9 +13,9 @@ go test ./...    # faster, no race detector
 | `internal/ground` | 41 | crew registry, dispatch, the question/answer round trip, credential isolation, restart recovery |
 | `internal/crew` | 11 | workdir boundary enforcement, agent transcript condensation |
 | `internal/runner` | 15 | launch specs for all three CLIs, runner preference order, generated MCP config, token handling |
-| `internal/bridge` | 7 | stdio↔HTTP pipe, concurrency under a blocking call, failure reporting |
+| `internal/bridge` | 10 | stdio↔HTTP pipe, concurrency under a blocking call, failure reporting |
 | `internal/store` | 5 | append-only log, replay, crash tolerance, file permissions |
-| `test` | 14 | end-to-end against the real binary: ground + a crew process + real jobs |
+| `test` | 16 | end-to-end against the real binary: ground + a crew process + real jobs |
 | `cmd/uplink` | 6 | log timestamping: date rollover, shared state across components, concurrency, opt-out |
 
 The end-to-end tests build `uplink` and run an actual ground daemon and crew
@@ -32,6 +32,22 @@ options; a `reply` releases the agent; the answer arrives verbatim; the agent
 finishes. Also the failure modes: nobody answers and the agent is released with
 guidance it can act on, and cancelling a job releases an agent blocked on it
 rather than leaving it parked.
+
+**Waiting instead of polling.** `await_job` is asserted to actually block and
+wake: a waiter parked on a running job is released when the job finishes, when
+its agent asks a question, and for every concurrent waiter at once. An
+already-finished job returns immediately rather than holding the caller for the
+full timeout, and a timeout is a normal outcome rather than an error. The
+end-to-end test times it — a three-second job must take about three seconds to
+report, proving it woke on completion rather than returning a snapshot or
+sitting out the timeout.
+
+**Retry safety in the bridge.** Read-only calls (`tools/list`, `initialize`,
+`ping`) are retried when they fail before reaching ground, because a dropped
+`tools/list` can leave a client believing uplink offers no tools at all.
+`tools/call` is asserted **never** to be retried — a test counts the requests
+and fails if `submit_job` is sent more than once, since dispatching a job twice
+is worse than one reported failure.
 
 **Credential scoping.** The three classes are tested against each other: a crew
 token is refused on `/mcp` and `/v1/shutdown`, the operator token is refused on

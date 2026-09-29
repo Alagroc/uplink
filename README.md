@@ -334,7 +334,8 @@ What your local model sees:
 | --- | --- |
 | `list_crew` | Who is connected: roles, OS/arch, available agent runners, active jobs |
 | `submit_job` | Dispatch work. Returns a `job_id` immediately — nothing blocks |
-| `job_status` | One job, or all active jobs |
+| `await_job` | Wait for a job instead of polling it: blocks until it finishes or its agent needs you |
+| `job_status` | One job, or all active jobs, with the current log position |
 | `job_logs` | Output, with `since_seq` for cheap incremental tailing |
 | `cancel_job` | Kill the process tree; releases an agent blocked on a question |
 | `inbox` | Agents waiting on you, oldest first, with the context they attached |
@@ -385,13 +386,44 @@ Ground picks the least loaded online crew for a role, so adding capacity is just
 starting another one. Add `--runner` to put different models behind different
 roles — see [Which agent CLI does a crew run?](#which-agent-cli-does-a-crew-run).
 
+## Watching a job without polling it
+
+A job that runs for twenty minutes should cost one call that sleeps, not forty
+that each re-read the same transcript:
+
+```
+await_job(job_id, timeout_s=600)
+```
+
+It blocks until the job reaches a terminal state **or its agent asks you a
+question**, whichever comes first, then returns the final status and the output
+produced while you waited. On a timeout it reports progress rather than failing,
+so a longer job is a handful of calls end to end.
+
+Every response ends with a cursor:
+
+```
+--- next_seq=412 — call await_job again with since_seq=412 to keep waiting
+```
+
+Pass that back and you get only what is new. `job_logs` reports the same cursor,
+and `job_status` shows the log position, so you can tell whether there is new
+output without fetching any.
+
+There is no true streaming tail — the tool interface is request/response — but
+waking on completion plus an incremental cursor covers what a tail is usually
+for.
+
 ## One notification caveat, stated plainly
 
 MCP is pull-only: ground **cannot** interrupt your local session to announce
 that a question is waiting. Your model only sees the inbox when it looks.
 
-So the human is the notification channel. Ground rings the terminal bell, and
-`--notify` runs any command you like when a question arrives:
+`await_job` is the closest thing to a push: the *call* sleeps, so a model that
+is already waiting on a job learns about a question the moment it is asked. But
+a session doing something else cannot be interrupted, so for those the human is
+the notification channel. Ground rings the terminal bell, and `--notify` runs
+any command you like when a question arrives:
 
 ```sh
 uplink ground --notify 'notify-send "uplink: $UPLINK_CREW needs you" "$UPLINK_QUESTION"'
