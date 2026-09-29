@@ -639,3 +639,14 @@ test/              end-to-end tests against the real binary
 ```
 
 See [TESTING.md](TESTING.md) for what is covered and the live-agent results.
+
+## License
+
+Copyright 2026 Alagroc
+
+Licensed under the Apache License, Version 2.0. You may obtain a copy of the
+licence in [LICENSE](LICENSE) or at
+<http://www.apache.org/licenses/LICENSE-2.0>.
+
+uplink has no third-party dependencies — it builds from the Go standard library
+alone — so there is nothing to attribute and no `NOTICE` file to carry.
