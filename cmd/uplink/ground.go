@@ -24,10 +24,13 @@ func runGround(ctx context.Context, args []string) error {
 	notify := fs.String("notify", "", "shell command run when an agent asks a question; UPLINK_CREW, UPLINK_QUESTION and UPLINK_QUESTION_ID are in its environment. The question text is written by an agent, so quote it (\"$UPLINK_QUESTION\") in your command")
 	bell := fs.Bool("bell", true, "ring the terminal bell when an agent asks a question")
 	debug := fs.Bool("debug", false, "log every request: what was asked, by which crew, the status and how long it took")
+	timestamps := fs.Bool("timestamps", true, "prefix each line with the time; turn off when a supervisor such as journald already stamps the stream")
 	offlineAfter := fs.Duration("offline-after", 90*time.Second, "mark a crew offline after this long without a poll")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
+
+	logTimestamps = *timestamps
 
 	if err := warnIfPubliclyBound(*addr); err != nil {
 		return err
@@ -62,7 +65,7 @@ func runGround(ctx context.Context, args []string) error {
 		OfflineAfter: *offlineAfter,
 		NotifyCmd:    *notify,
 		Bell:         *bell,
-	}, func(line string) { fmt.Fprintln(os.Stderr, line) })
+	}, func(line string) { logf("%s", line) })
 
 	stopped := make(chan string, 1)
 	srv := &ground.Server{
@@ -135,7 +138,7 @@ func warnIfPubliclyBound(addr string) error {
 
 func printGroundBanner(addr, stateDir string) {
 	var b strings.Builder
-	fmt.Fprintf(&b, "[ground] uplink %s listening on http://%s\n", Version, addr)
+	fmt.Fprintf(&b, "[ground] uplink %s listening on http://%s (started %s)\n", Version, addr, time.Now().Format("2006-01-02 15:04:05"))
 	fmt.Fprintf(&b, "[ground] state + audit log: %s\n", stateDir)
 	fmt.Fprintf(&b, "[ground] operator MCP endpoint: http://%s/mcp\n", addr)
 	fmt.Fprintf(&b, "[ground] agent MCP endpoint:    http://%s/mcp/agent\n", addr)

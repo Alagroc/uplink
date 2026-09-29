@@ -405,16 +405,31 @@ local session to check the inbox.
 
 ## Watching what it is doing
 
+Ground stamps every line with the time. The date is printed as its own marker
+only when it rolls over, so a log left running for days stays unambiguous
+without every line paying for a full date:
+
+```
+--- 2026-09-29 ---
+13:54:24.013 [ground] crew "devbox" registered
+13:54:27.052 [ground] devbox is waiting: which storage class should the PVC use?
+--- 2026-09-30 ---
+09:02:11.887 [ground] job job_9e8f906b finished: done
+```
+
+Pass `--timestamps=false` when something else already stamps the stream, such as
+journald or a supervisor.
+
 `uplink ground --debug` logs one line per request — what was asked, by which
 crew, the status and how long it took:
 
 ```
-  POST /v1/crew/register crew=devbox runners=claude             200    0.1ms   57B
-  POST /mcp             tools/call submit_job                   200    0.2ms  168B
-  POST /v1/crew/poll    crew=devbox                             200    3.00s  298B
-  POST /v1/crew/state   crew=devbox job_fbd1e80e -> running     200    0.0ms   14B
-  POST /v1/crew/logs    crew=devbox job_fbd1e80e 3 lines        200    0.2ms   15B
-! POST /mcp             tools/list                              401    0.0ms   34B
+13:54:24.013 [ground]   POST /v1/crew/register crew=devbox runners=claude      200   0.1ms   57B
+13:54:27.045 [ground]   POST /mcp             tools/call submit_job            200   0.2ms  168B
+13:54:27.046 [ground]   POST /v1/crew/poll    crew=devbox                      200   3.00s  298B
+13:54:27.047 [ground]   POST /v1/crew/state   crew=devbox job_fbd1e80e -> running  200  0.0ms  14B
+13:54:27.051 [ground]   POST /v1/crew/logs    crew=devbox job_fbd1e80e 3 lines 200   0.2ms   15B
+13:54:31.002 [ground] ! POST /mcp             tools/list                       401   0.0ms   34B
 ```
 
 Lines are described in uplink's vocabulary rather than HTTP's: MCP calls name

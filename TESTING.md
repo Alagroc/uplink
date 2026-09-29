@@ -5,7 +5,7 @@ make test        # everything, with the race detector
 go test ./...    # faster, no race detector
 ```
 
-122 tests across 7 packages. All pass under `-race`.
+128 tests across 8 packages. All pass under `-race`.
 
 | Package | Tests | Covers |
 | --- | --- | --- |
@@ -16,6 +16,7 @@ go test ./...    # faster, no race detector
 | `internal/bridge` | 7 | stdio↔HTTP pipe, concurrency under a blocking call, failure reporting |
 | `internal/store` | 5 | append-only log, replay, crash tolerance, file permissions |
 | `test` | 14 | end-to-end against the real binary: ground + a crew process + real jobs |
+| `cmd/uplink` | 6 | log timestamping: date rollover, shared state across components, concurrency, opt-out |
 
 The end-to-end tests build `uplink` and run an actual ground daemon and crew
 process over a real socket. The stand-in for the agent is a Python script that

@@ -761,7 +761,7 @@ func (g *Ground) Ask(job proto.Job, req proto.AskReq) (proto.Question, error) {
 // notify tells the human a bot is waiting. MCP cannot push to the model, so
 // this is the path by which the operator learns to check the inbox.
 func (g *Ground) notify(q proto.Question) {
-	line := fmt.Sprintf("[uplink] %s is waiting: %s", q.CrewName, firstLine(q.Question))
+	line := fmt.Sprintf("%s is waiting: %s", q.CrewName, firstLine(q.Question))
 	if g.opts.Bell {
 		g.stderr("\a" + line)
 	} else {

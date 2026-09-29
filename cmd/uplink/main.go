@@ -13,10 +13,13 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"os"
 	"os/signal"
 	"strings"
+	"sync"
 	"syscall"
+	"time"
 )
 
 // Version is overridden at build time with -ldflags "-X main.Version=..."
@@ -110,9 +113,46 @@ func (s *stringList) Set(v string) error {
 	return nil
 }
 
+var (
+	// logOut is a variable so tests can capture what the loggers emit.
+	logOut io.Writer = os.Stderr
+
+	logMu sync.Mutex
+	// logTimestamps is off only when something else is already stamping the
+	// stream, such as journald or a supervisor.
+	logTimestamps = true
+	lastLogDay    string
+
+	// logNow is a variable so tests can step across a midnight boundary.
+	logNow = time.Now
+)
+
+// logger returns a stderr logger for one component.
+//
+// Lines carry the time but not the date: a full date on every line is a lot of
+// width to spend on something that changes once a day, so the date is printed
+// as its own marker whenever it rolls over. A log spanning days stays
+// unambiguous without every line paying for it.
+//
+// The mutex also keeps concurrent writers from interleaving — ground logs one
+// line per request from many goroutines at once.
 func logger(prefix string) func(string, ...any) {
 	return func(format string, args ...any) {
-		fmt.Fprintf(os.Stderr, "["+prefix+"] "+format+"\n", args...)
+		msg := fmt.Sprintf(format, args...)
+
+		logMu.Lock()
+		defer logMu.Unlock()
+
+		if !logTimestamps {
+			fmt.Fprintf(logOut, "[%s] %s\n", prefix, msg)
+			return
+		}
+		now := logNow()
+		if day := now.Format("2006-01-02"); day != lastLogDay {
+			fmt.Fprintf(logOut, "--- %s ---\n", day)
+			lastLogDay = day
+		}
+		fmt.Fprintf(logOut, "%s [%s] %s\n", now.Format("15:04:05.000"), prefix, msg)
 	}
 }
 
