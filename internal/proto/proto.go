@@ -149,7 +149,11 @@ type Command struct {
 // --- crew <-> ground request/response bodies ---
 
 type RegisterReq struct {
-	Name     string   `json:"name"`
+	Name string `json:"name"`
+	// Clean asks ground to discard any unfinished job it still holds for this
+	// crew name. Only a freshly started crew may set it: a crew reconnecting
+	// mid-job genuinely does have work running.
+	Clean    bool     `json:"clean,omitempty"`
 	Roles    []string `json:"roles,omitempty"`
 	OS       string   `json:"os"`
 	Arch     string   `json:"arch"`
@@ -162,6 +166,8 @@ type RegisterReq struct {
 type RegisterResp struct {
 	CrewID        string `json:"crew_id"`
 	GroundVersion string `json:"ground_version"`
+	// Discarded lists jobs abandoned because the crew started clean.
+	Discarded []string `json:"discarded,omitempty"`
 }
 
 type PollReq struct {

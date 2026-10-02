@@ -5,13 +5,13 @@ make test        # everything, with the race detector
 go test ./...    # faster, no race detector
 ```
 
-144 tests across 8 packages. All pass under `-race`.
+156 tests across 8 packages. All pass under `-race`.
 
 | Package | Tests | Covers |
 | --- | --- | --- |
 | `internal/mcp` | 18 | protocol negotiation, tool dispatch, schema shape, stdio and HTTP transports |
-| `internal/ground` | 63 | crew registry, dispatch, the question/answer round trip, blocking waits, credential scoping and revocation, restart recovery, shutdown safety |
-| `internal/crew` | 11 | workdir boundary enforcement, agent transcript condensation |
+| `internal/ground` | 71 | crew registry, dispatch, the question/answer round trip, blocking waits, credential scoping and revocation, restart recovery, shutdown safety |
+| `internal/crew` | 15 | workdir boundary enforcement, agent transcript condensation |
 | `internal/runner` | 15 | launch specs for all three CLIs, runner preference order, generated MCP config, token handling |
 | `internal/bridge` | 10 | stdio↔HTTP pipe, concurrency under a blocking call, failure reporting |
 | `internal/store` | 5 | append-only log, replay, crash tolerance, file permissions |
@@ -32,6 +32,17 @@ options; a `reply` releases the agent; the answer arrives verbatim; the agent
 finishes. Also the failure modes: nobody answers and the agent is released with
 guidance it can act on, and cancelling a job releases an agent blocked on it
 rather than leaving it parked.
+
+**Clean restarts.** A crew killed mid-job leaves ground showing work that can
+never finish, so `--clean` is tested against that exact sequence: a stale
+`running` job is discarded and marked cancelled with a reason, queued work is
+dropped rather than re-delivered, agent tokens are retired, blocked questions
+expire, and anyone in `await_job` is released. Two guards matter as much as the
+feature: another crew's jobs must be untouched, and a plain reconnect must
+**not** discard anything — a test drives a crew through a forced
+re-registration and asserts `clean` is sent on the first one only, because by
+the second this process really does have jobs running. Transcript files survive
+pruning; only generated per-job configs go.
 
 **Waiting instead of polling.** `await_job` is asserted to actually block and
 wake: a waiter parked on a running job is released when the job finishes, when

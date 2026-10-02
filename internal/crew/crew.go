@@ -36,6 +36,10 @@ type Config struct {
 	AgentSystemPrompt string
 	// MaxConcurrent bounds jobs running at once on this host.
 	MaxConcurrent int
+	// Clean discards whatever ground still thinks this crew is doing, and
+	// removes configs left by a previous process. Applies to the first
+	// registration only.
+	Clean bool
 }
 
 // Crew is a worker process.
@@ -47,6 +51,10 @@ type Crew struct {
 	mu      sync.Mutex
 	crewID  string
 	running map[string]context.CancelFunc // job id -> cancel
+	// cleanPending is cleared after the first successful registration. A
+	// reconnect must never ask ground to discard work, because by then this
+	// process really does have jobs running.
+	cleanPending bool
 }
 
 // New builds a Crew.
@@ -78,7 +86,13 @@ func New(cfg Config, logf func(string, ...any)) (*Crew, error) {
 	if logf == nil {
 		logf = func(string, ...any) {}
 	}
-	return &Crew{cfg: cfg, client: newClient(cfg.GroundURL, cfg.Token), logf: logf, running: map[string]context.CancelFunc{}}, nil
+	return &Crew{
+		cfg:          cfg,
+		client:       newClient(cfg.GroundURL, cfg.Token),
+		logf:         logf,
+		running:      map[string]context.CancelFunc{},
+		cleanPending: cfg.Clean,
+	}, nil
 }
 
 // Run registers with ground and serves jobs until ctx is cancelled.
@@ -146,10 +160,15 @@ func (c *Crew) register(ctx context.Context) error {
 	hostname, _ := os.Hostname()
 	detected := runner.Detect(c.cfg.Runners)
 
+	c.mu.Lock()
+	clean := c.cleanPending
+	c.mu.Unlock()
+
 	rctx, rcancel := context.WithTimeout(ctx, 15*time.Second)
 	defer rcancel()
 	resp, err := c.client.register(rctx, proto.RegisterReq{
 		Name:     c.cfg.Name,
+		Clean:    clean,
 		Roles:    c.cfg.Roles,
 		OS:       goos(),
 		Arch:     goarch(),
@@ -164,10 +183,52 @@ func (c *Crew) register(ctx context.Context) error {
 
 	c.mu.Lock()
 	c.crewID = resp.CrewID
+	// Only the first registration starts clean. From here on, a reconnect has
+	// live jobs to protect.
+	c.cleanPending = false
 	c.mu.Unlock()
 
 	c.logf("registered with ground as %q (%s); runners: %s", c.cfg.Name, resp.CrewID, describe(detected))
+
+	if clean {
+		if len(resp.Discarded) > 0 {
+			c.logf("started clean: ground discarded %d leftover job(s): %s",
+				len(resp.Discarded), strings.Join(resp.Discarded, ", "))
+		} else {
+			c.logf("started clean: ground had no leftover jobs for this crew")
+		}
+		if removed := c.pruneStaleFiles(); removed > 0 {
+			c.logf("started clean: removed %d stale generated file(s) from %s", removed, c.cfg.StateDir)
+		}
+	}
 	return nil
+}
+
+// pruneStaleFiles removes the per-job files a previous process generated.
+//
+// These leak whenever a crew is killed before its cleanup runs, and accumulate
+// silently. Transcripts are deliberately left alone: they are the record of
+// what an agent actually did, which is exactly what you want after a crash.
+func (c *Crew) pruneStaleFiles() int {
+	dir := filepath.Join(c.cfg.StateDir, "mcp")
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return 0
+	}
+	removed := 0
+	for _, e := range entries {
+		if e.IsDir() {
+			continue
+		}
+		name := e.Name()
+		if !strings.HasPrefix(name, "mcp-") && !strings.HasPrefix(name, "job-token-") {
+			continue
+		}
+		if os.Remove(filepath.Join(dir, name)) == nil {
+			removed++
+		}
+	}
+	return removed
 }
 
 func describe(runners []string) string {

@@ -204,6 +204,16 @@ func (g *Ground) Register(req proto.RegisterReq) (proto.RegisterResp, error) {
 	g.crew[id] = entry
 	g.byName[name] = id
 
+	// A crew that has just started has nothing running, so anything ground
+	// still thinks it is doing is a leftover from a process that is gone. Those
+	// jobs can never reach a terminal state on their own — nobody is left to
+	// report one — so they would sit in "running" indefinitely, holding a live
+	// agent token and counting against this crew's load.
+	var discarded []string
+	if req.Clean {
+		discarded = g.discardCrewJobsLocked(name, "discarded: crew restarted with --clean")
+	}
+
 	// Re-point every unfinished job for this name at the new crew id. A crew
 	// keeps running its jobs across a reconnect, so without this the jobs it is
 	// still working on would be owned by an id that no longer exists and every
@@ -225,7 +235,41 @@ func (g *Ground) Register(req proto.RegisterReq) (proto.RegisterResp, error) {
 
 	g.store.Auditf("crew %q registered from %s (%s/%s) roles=%v", name, req.Hostname, req.OS, req.Arch, req.Roles)
 	_ = g.store.Append(store.KindCrew, entry.info)
-	return proto.RegisterResp{CrewID: id, GroundVersion: proto.Version}, nil
+	return proto.RegisterResp{CrewID: id, GroundVersion: proto.Version, Discarded: discarded}, nil
+}
+
+// discardCrewJobsLocked abandons every unfinished job for a crew name and
+// returns their ids. Caller holds mu.
+//
+// The jobs are marked cancelled rather than deleted: the event log is the audit
+// trail, and "this job was thrown away, here is why" is worth more than a gap.
+func (g *Ground) discardCrewJobsLocked(name, reason string) []string {
+	var discarded []string
+	now := time.Now().UTC()
+
+	for _, jid := range g.jobOrder {
+		j := g.jobs[jid]
+		if j.CrewName != name || j.Terminal() {
+			continue
+		}
+		j.State = proto.StateCanceled
+		j.EndedAt = &now
+		j.Error = reason
+		delete(g.byToken, j.AgentToken)
+		g.expireQuestionsLocked(j.ID, reason)
+		g.finished = append(g.finished, j.ID)
+		// Release anyone blocked in await_job on a job that is now going nowhere.
+		g.signalJobLocked(j.ID)
+		g.persistJobLocked(j)
+		discarded = append(discarded, j.ID)
+	}
+
+	if len(discarded) > 0 {
+		g.pruneFinishedLocked()
+		g.store.Auditf("crew %q started clean; discarded %d unfinished job(s): %s",
+			name, len(discarded), strings.Join(discarded, ", "))
+	}
+	return discarded
 }
 
 // crewNameLocked resolves a crew id to its name. Caller holds mu.

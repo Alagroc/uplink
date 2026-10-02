@@ -26,6 +26,7 @@ func runCrew(ctx context.Context, args []string) error {
 	maxConcurrent := fs.Int("max-concurrent", 4, "maximum jobs running at once on this host")
 	pollWait := fs.Duration("poll", 25*time.Second, "how long each long-poll waits; also the heartbeat interval")
 	stateDir := fs.String("state", "", "state directory for generated configs and raw transcripts (default ~/.uplink/crew)")
+	clean := fs.Bool("clean", false, "start fresh: ask ground to discard any job it still thinks this crew is running, and remove configs left by a previous process. Use after this crew was killed; never while another copy of it is running")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -84,6 +85,7 @@ func runCrew(ctx context.Context, args []string) error {
 		PollWait:          *pollWait,
 		AgentSystemPrompt: ground.AgentInstructions,
 		MaxConcurrent:     *maxConcurrent,
+		Clean:             *clean,
 	}, logf)
 	if err != nil {
 		return err

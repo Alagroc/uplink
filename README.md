@@ -289,6 +289,32 @@ Then, in order:
 - **Tools work, `list_crew` is empty** — the operator side is fine; the crew has
   not registered. Read the crew's own output on the devbox.
 
+## Restarting a crew cleanly
+
+If a crew is killed while a job is running, nothing is left to report that the
+job ended. Ground keeps showing it as `running` — holding a live agent token and
+counting against that crew's load — and it will not clear by itself:
+
+```sh
+uplink crew --name devbox --workdir /work/app --clean
+```
+
+That tells ground to discard anything it still thinks this crew is doing, marks
+those jobs `canceled` with the reason, releases any question their agents were
+blocked on, wakes anyone sitting in `await_job`, and removes the per-job config
+files a killed process left behind. Transcripts are kept — after a crash they
+are exactly what you want.
+
+Use it when the crew was killed. **Do not** use it while another copy of that
+crew is running, and note that it is the *first* registration only: a crew that
+merely reconnects after a dropped tunnel keeps its jobs, which is the whole
+point of the reconnect.
+
+Ground cannot do this for you automatically. A crew that reconnects mid-job and
+a crew that restarted from scratch look identical from the outside — only the
+crew knows whether it still has work running, which is why this is a flag on the
+crew rather than something ground infers.
+
 ## Which agent CLI does a crew run?
 
 A crew reports what it found when it registers, which is what `list_crew` shows:
