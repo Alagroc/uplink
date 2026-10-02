@@ -10,7 +10,7 @@ go test ./...    # faster, no race detector
 | Package | Tests | Covers |
 | --- | --- | --- |
 | `internal/mcp` | 18 | protocol negotiation, tool dispatch, schema shape, stdio and HTTP transports |
-| `internal/ground` | 41 | crew registry, dispatch, the question/answer round trip, credential isolation, restart recovery |
+| `internal/ground` | 63 | crew registry, dispatch, the question/answer round trip, blocking waits, credential scoping and revocation, restart recovery, shutdown safety |
 | `internal/crew` | 11 | workdir boundary enforcement, agent transcript condensation |
 | `internal/runner` | 15 | launch specs for all three CLIs, runner preference order, generated MCP config, token handling |
 | `internal/bridge` | 10 | stdio↔HTTP pipe, concurrency under a blocking call, failure reporting |

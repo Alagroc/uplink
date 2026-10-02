@@ -538,6 +538,9 @@ boundaries are deliberate:
 - **An audit trail.** Every job, command, question, answer and message is
   appended to `~/.uplink/ground/events.jsonl`, owner-readable only.
 
+Found a hole in one of those? [SECURITY.md](SECURITY.md) has the reporting path
+and says which of uplink's rough edges are deliberate rather than bugs.
+
 **The one loud caveat:** agent jobs launch the remote CLI with its permission
 prompts disabled (`--permission-mode bypassPermissions` for Claude Code, and the
 equivalent elsewhere). A headless agent that stops at a prompt is useless, so
