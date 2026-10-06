@@ -294,7 +294,9 @@ func (c *Crew) finish(ctx context.Context, job proto.Job, state string, exit *in
 // --- log shipping ---
 
 // maxLineLen truncates pathological single lines (minified bundles, base64).
-const maxLineLen = 8000
+// It sits above maxFinalMessage so an agent's closing message, which is the
+// deliverable of the job, passes through whole rather than being clipped twice.
+const maxLineLen = 16000
 
 // shipper batches log lines and flushes them to ground.
 type shipper struct {

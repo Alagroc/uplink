@@ -505,6 +505,28 @@ For what an individual job did, prefer `job_logs`; for a full history including
 what was condensed away, read the crew's raw transcript at
 `~/.uplink/crew/transcripts/<job_id>.jsonl`.
 
+### What gets condensed, and what does not
+
+Intermediate output is summarised hard — a tool call becomes one line naming its
+key argument, and ordinary messages are collapsed onto a single line and clipped.
+That keeps a chatty twenty-minute job readable.
+
+The agent's **closing message is treated differently**: it is the deliverable of
+the job, not a log line. It keeps its line breaks and gets 8000 characters, so a
+review or a migration summary arrives as the markdown it was written as rather
+than as a flattened paragraph. Past that it is cut with a `…[truncated]` marker,
+so a clipped answer never looks complete.
+
+Nothing is lost either way. The crew writes every raw event verbatim to its
+transcript before any of this, so the untouched text of even a truncated final
+message is on the crew host:
+
+```sh
+# on the crew host
+python3 -c "import json,sys;[print(json.loads(l).get('result','')) for l in open(sys.argv[1]) if '\"result\"' in l]" \
+  ~/.uplink/crew/transcripts/<job_id>.jsonl
+```
+
 ## Crew credentials
 
 Each crew gets its own token, minted on the machine that runs ground:

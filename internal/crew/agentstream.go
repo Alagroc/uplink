@@ -7,6 +7,14 @@ import (
 	"unicode/utf8"
 )
 
+// maxFinalMessage caps the agent's closing message.
+//
+// That message is the deliverable of a job — a review, a summary, a plan —
+// rather than a log line, so it gets far more room than ordinary output and
+// keeps its line breaks. A markdown document with its newlines collapsed into
+// spaces is technically present and practically unreadable.
+const maxFinalMessage = 8000
+
 // summarizeAgentEvent turns one agent transcript event into zero or more short
 // operator-facing lines.
 //
@@ -58,7 +66,7 @@ func summarizeAgentEvent(line []byte) []string {
 		}
 		out := []string{strings.Join(parts, ", ")}
 		if text := str(ev["result"]); text != "" {
-			out = append(out, "final: "+clip(text, 2000))
+			out = append(out, "final: "+clipKeepingLines(text, maxFinalMessage))
 		}
 		return out
 
@@ -282,6 +290,20 @@ func compact(v any) string {
 		return ""
 	}
 	return string(data)
+}
+
+// clipKeepingLines truncates without flattening the text, for content meant to
+// be read rather than scanned.
+func clipKeepingLines(s string, n int) string {
+	s = strings.TrimSpace(s)
+	if len(s) <= n {
+		return s
+	}
+	cut := n
+	for cut > 0 && !utf8.RuneStart(s[cut]) {
+		cut--
+	}
+	return strings.TrimRight(s[:cut], " \t\n") + "\n…[truncated]"
 }
 
 // clip collapses a value onto one line and truncates it. Cutting on a rune

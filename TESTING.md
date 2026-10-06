@@ -5,13 +5,13 @@ make test        # everything, with the race detector
 go test ./...    # faster, no race detector
 ```
 
-165 tests across 8 packages. All pass under `-race`.
+170 tests across 8 packages. All pass under `-race`.
 
 | Package | Tests | Covers |
 | --- | --- | --- |
 | `internal/mcp` | 18 | protocol negotiation, tool dispatch, schema shape, stdio and HTTP transports |
 | `internal/ground` | 71 | crew registry, dispatch, the question/answer round trip, blocking waits, credential scoping and revocation, restart recovery, shutdown safety |
-| `internal/crew` | 17 | workdir boundary enforcement, agent transcript condensation |
+| `internal/crew` | 22 | workdir boundary enforcement, agent transcript condensation |
 | `internal/runner` | 22 | launch specs for all three CLIs, runner preference order, generated MCP config, token handling |
 | `internal/bridge` | 10 | stdio↔HTTP pipe, concurrency under a blocking call, failure reporting |
 | `internal/store` | 5 | append-only log, replay, crash tolerance, file permissions |
@@ -42,6 +42,13 @@ has it does not get a duplicate, the flag lands *before* the positional prompt
 runner without a `{{system}}` placeholder is asserted to receive the briefing
 folded into its prompt, while Claude Code — which has a flag for it — is
 asserted to receive it exactly once.
+
+**The closing message.** It is the deliverable of a job rather than a log line,
+so it is tested separately: a long markdown review keeps its headings and blank
+lines instead of being flattened, roughly 8000 characters arrive where 2000 used
+to, a message past the cap is marked truncated so a cut-off answer never reads
+as complete, a short one gains no marker, the cut lands on a rune boundary, and
+intermediate messages are asserted to still collapse onto one line.
 
 **Transcript shapes.** Claude, Codex and Cursor event shapes each have their own
 cases, including the two that misreported: a Cursor `tool_call` whose arguments

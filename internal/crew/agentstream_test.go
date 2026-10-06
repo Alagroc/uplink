@@ -1,8 +1,10 @@
 package crew
 
 import (
+	"encoding/json"
 	"strings"
 	"testing"
+	"unicode/utf8"
 )
 
 func TestSummarizeClaudeEvents(t *testing.T) {
@@ -170,5 +172,83 @@ func TestMissingToolListIsNotReportedAsZero(t *testing.T) {
 	got = strings.Join(summarizeAgentEvent([]byte(empty)), " ")
 	if !strings.Contains(got, "0 tools available") {
 		t.Errorf("an explicitly empty list should be reported as zero: %q", got)
+	}
+}
+
+// --- the agent's closing message ---
+
+// The final message is the deliverable of a job, not a log line. A PR review or
+// a migration summary arrives here, and at 2000 flattened characters it was
+// neither complete nor readable.
+func TestFinalMessageKeepsItsShapeUpTo8K(t *testing.T) {
+	// Longer than the cap, so this exercises the limit rather than just fitting
+	// under it. The old limit was 2000.
+	review := "## Findings\n\n1. First issue\n2. Second issue\n\n" + strings.Repeat("detail line\n", 1000)
+	event, err := json.Marshal(map[string]any{
+		"type": "result", "subtype": "success", "result": review,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	out := strings.Join(summarizeAgentEvent(event), "\n")
+
+	if !strings.Contains(out, "## Findings") {
+		t.Error("the opening heading should survive")
+	}
+	// The point of the change: structure is preserved.
+	if !strings.Contains(out, "## Findings\n\n1. First issue") {
+		t.Errorf("newlines were flattened, which is what made a review unreadable:\n%.200s", out)
+	}
+	// And far more of it arrives than the old 2000-character cap allowed.
+	if len(out) < 7000 {
+		t.Errorf("final message is %d chars; expected close to the %d cap", len(out), maxFinalMessage)
+	}
+}
+
+func TestFinalMessageIsStillBounded(t *testing.T) {
+	huge := strings.Repeat("x", 50000)
+	event, _ := json.Marshal(map[string]any{"type": "result", "result": huge})
+
+	out := strings.Join(summarizeAgentEvent(event), "\n")
+	if len(out) > maxFinalMessage+200 {
+		t.Errorf("final message grew to %d chars; the cap is %d", len(out), maxFinalMessage)
+	}
+	if !strings.Contains(out, "truncated") {
+		t.Error("a truncated message should say so, or the reader trusts a cut-off answer")
+	}
+}
+
+// A short message must not gain a truncation marker.
+func TestShortFinalMessageIsUntouched(t *testing.T) {
+	event, _ := json.Marshal(map[string]any{"type": "result", "result": "Done.\n\nTwo files changed."})
+	out := strings.Join(summarizeAgentEvent(event), "\n")
+
+	if strings.Contains(out, "truncated") {
+		t.Errorf("short message was marked truncated: %q", out)
+	}
+	if !strings.Contains(out, "Done.\n\nTwo files changed.") {
+		t.Errorf("short message was altered: %q", out)
+	}
+}
+
+func TestClipKeepingLinesCutsOnARuneBoundary(t *testing.T) {
+	// Multi-byte runes either side of the cut.
+	s := strings.Repeat("é", 100)
+	got := clipKeepingLines(s, 51)
+	if !utf8.ValidString(got) {
+		t.Errorf("cut produced invalid UTF-8: %q", got)
+	}
+}
+
+// The ordinary one-line summaries must stay one line.
+func TestOtherSummariesStillCollapse(t *testing.T) {
+	event, _ := json.Marshal(map[string]any{
+		"type":    "assistant",
+		"message": map[string]any{"content": []any{map[string]any{"type": "text", "text": "line one\nline two"}}},
+	})
+	out := strings.Join(summarizeAgentEvent(event), "\n")
+	if strings.Contains(out, "line one\nline two") {
+		t.Errorf("intermediate messages should stay on one line: %q", out)
 	}
 }
