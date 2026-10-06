@@ -86,6 +86,7 @@ func runCrew(ctx context.Context, args []string) error {
 		AgentSystemPrompt: ground.AgentInstructions,
 		MaxConcurrent:     *maxConcurrent,
 		Clean:             *clean,
+		Build:             Version,
 	}, logf)
 	if err != nil {
 		return err

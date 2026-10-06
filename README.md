@@ -322,8 +322,26 @@ A crew reports what it found when it registers, which is what `list_crew` shows:
 ```
 devbox  [ONLINE]
   host: ip-10-0-1-42  linux/arm64
+  build: v1.4.0
   runners: claude, codex
 ```
+
+If a crew is running a different binary from ground, `list_crew` says so:
+
+```
+stale  [ONLINE]
+  build: v0.9.1  ← is running build v0.9.1; ground is v1.4.0; rebuild and restart it with --clean
+```
+
+This is worth checking when a crew behaves unlike the code you are reading.
+Protocol compatibility does not catch it: the protocol version changes rarely,
+so a months-old crew binary registers perfectly happily. Ground also logs the
+mismatch once, when that crew registers.
+
+A mismatch is a warning rather than a refusal — a crew one commit behind is
+usually fine, and a rebuild should not block work mid-migration. Binaries built
+without `-ldflags` report `dev`, which says nothing about which commit they came
+from, so two of those are never compared.
 
 For an `agent` job, the CLI is chosen by the first of these that applies:
 

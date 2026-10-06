@@ -49,7 +49,8 @@ type Crew struct {
 	Hostname string    `json:"hostname"`
 	Workdir  string    `json:"workdir"`
 	Runners  []string  `json:"runners,omitempty"` // agent CLIs found on PATH
-	Version  string    `json:"version"`
+	Version  string    `json:"version"`           // protocol version
+	Build    string    `json:"build,omitempty"`   // crew binary build
 	JoinedAt time.Time `json:"joined_at"`
 	LastSeen time.Time `json:"last_seen"`
 }
@@ -160,7 +161,8 @@ type RegisterReq struct {
 	Hostname string   `json:"hostname"`
 	Workdir  string   `json:"workdir"`
 	Runners  []string `json:"runners,omitempty"`
-	Version  string   `json:"version"`
+	Version  string   `json:"version"`         // protocol version
+	Build    string   `json:"build,omitempty"` // crew binary build
 }
 
 type RegisterResp struct {

@@ -42,6 +42,11 @@ type Options struct {
 	NotifyCmd string
 	// Bell writes an ASCII BEL to ground's stderr on a new question.
 	Bell bool
+	// Build is ground's own binary version, used to spot a crew running an
+	// older one. Protocol compatibility alone does not catch that: the protocol
+	// version rarely changes, so a months-old crew binary registers cleanly and
+	// behaves differently for reasons nothing reports.
+	Build string
 }
 
 type crewEntry struct {
@@ -197,7 +202,7 @@ func (g *Ground) Register(req proto.RegisterReq) (proto.RegisterResp, error) {
 		info: proto.Crew{
 			ID: id, Name: name, Roles: req.Roles, OS: req.OS, Arch: req.Arch,
 			Hostname: req.Hostname, Workdir: req.Workdir, Runners: req.Runners,
-			Version: req.Version, JoinedAt: now, LastSeen: now,
+			Version: req.Version, Build: req.Build, JoinedAt: now, LastSeen: now,
 		},
 		wake: make(chan struct{}, 1),
 	}
@@ -233,7 +238,11 @@ func (g *Ground) Register(req proto.RegisterReq) (proto.RegisterResp, error) {
 		}
 	}
 
-	g.store.Auditf("crew %q registered from %s (%s/%s) roles=%v", name, req.Hostname, req.OS, req.Arch, req.Roles)
+	if skew := g.buildSkew(req.Build); skew != "" {
+		g.stderr(fmt.Sprintf("crew %q %s", name, skew))
+	}
+	g.store.Auditf("crew %q registered from %s (%s/%s) build=%s roles=%v",
+		name, req.Hostname, req.OS, req.Arch, orUnset(req.Build), req.Roles)
 	_ = g.store.Append(store.KindCrew, entry.info)
 	return proto.RegisterResp{CrewID: id, GroundVersion: proto.Version, Discarded: discarded}, nil
 }
@@ -358,12 +367,41 @@ func (g *Ground) enqueue(entry *crewEntry, cmd proto.Command) {
 	}
 }
 
+// buildSkew describes how a crew's build differs from ground's, or "" when
+// they match or cannot be compared.
+//
+// An unbuilt binary reports "dev", which says nothing useful about which commit
+// it came from, so two of those are not treated as a mismatch.
+func (g *Ground) buildSkew(crewBuild string) string {
+	ours := g.opts.Build
+	switch {
+	case ours == "" || ours == "dev":
+		return ""
+	case crewBuild == "":
+		return "reports no build version: it predates build reporting and is out of date"
+	case crewBuild == "dev":
+		return ""
+	case crewBuild != ours:
+		return fmt.Sprintf("is running build %s; ground is %s", crewBuild, ours)
+	}
+	return ""
+}
+
+func orUnset(s string) string {
+	if s == "" {
+		return "unknown"
+	}
+	return s
+}
+
 // CrewView is a crew plus derived status, as reported to the operator.
 type CrewView struct {
 	proto.Crew
 	Online      bool     `json:"online"`
 	ActiveJobs  []string `json:"active_jobs,omitempty"`
 	LastSeenAgo string   `json:"last_seen_ago"`
+	// BuildSkew is set when this crew's binary differs from ground's.
+	BuildSkew string `json:"build_skew,omitempty"`
 }
 
 // ListCrew returns every registered crew, newest registration last.
@@ -387,6 +425,7 @@ func (g *Ground) ListCrew() []CrewView {
 			Online:      now.Sub(e.info.LastSeen) < g.opts.OfflineAfter,
 			ActiveJobs:  active[e.info.ID],
 			LastSeenAgo: now.Sub(e.info.LastSeen).Round(time.Second).String(),
+			BuildSkew:   g.buildSkew(e.info.Build),
 		})
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })

@@ -36,6 +36,9 @@ type Config struct {
 	AgentSystemPrompt string
 	// MaxConcurrent bounds jobs running at once on this host.
 	MaxConcurrent int
+	// Build is this binary's version, reported so an operator can see when a
+	// crew is running older code than ground.
+	Build string
 	// Clean discards whatever ground still thinks this crew is doing, and
 	// removes configs left by a previous process. Applies to the first
 	// registration only.
@@ -176,6 +179,7 @@ func (c *Crew) register(ctx context.Context) error {
 		Workdir:  c.cfg.Workdir,
 		Runners:  detected,
 		Version:  proto.Version,
+		Build:    c.cfg.Build,
 	})
 	if err != nil {
 		return err

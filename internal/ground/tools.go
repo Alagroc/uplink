@@ -49,7 +49,7 @@ are waiting for you. Call task_complete with a summary when you finish.`
 func (g *Ground) RegisterOperatorTools(s *mcp.Server) {
 	s.Add(mcp.Tool{
 		Name:        "list_crew",
-		Description: "List remote crew registered with ground: name, roles, OS/arch, available agent runners, online status and active jobs.",
+		Description: "List remote crew registered with ground: name, roles, OS/arch, binary build, available agent runners, online status and active jobs. Flags any crew running a different build from ground, which is otherwise invisible.",
 		Schema:      mcp.Schema{Props: map[string]mcp.Prop{}},
 		Handler:     g.toolListCrew,
 	})
@@ -172,6 +172,11 @@ func (g *Ground) toolListCrew(_ context.Context, _ json.RawMessage) (string, err
 		}
 		fmt.Fprintf(&b, "%s  [%s]\n", c.Name, status)
 		fmt.Fprintf(&b, "  host: %s  %s/%s\n", c.Hostname, c.OS, c.Arch)
+		if c.BuildSkew != "" {
+			fmt.Fprintf(&b, "  build: %s  ← %s; rebuild and restart it with --clean\n", orUnset(c.Build), c.BuildSkew)
+		} else if c.Build != "" {
+			fmt.Fprintf(&b, "  build: %s\n", c.Build)
+		}
 		if len(c.Roles) > 0 {
 			fmt.Fprintf(&b, "  roles: %s\n", strings.Join(c.Roles, ", "))
 		}

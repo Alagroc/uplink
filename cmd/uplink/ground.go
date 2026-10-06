@@ -65,6 +65,7 @@ func runGround(ctx context.Context, args []string) error {
 		OfflineAfter: *offlineAfter,
 		NotifyCmd:    *notify,
 		Bell:         *bell,
+		Build:        Version,
 	}, func(line string) { logf("%s", line) })
 
 	stopped := make(chan string, 1)
