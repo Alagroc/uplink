@@ -17,7 +17,18 @@ import (
 const scriptedAgent = `#!/usr/bin/env python3
 import json, os, subprocess, sys
 
-prompt = sys.argv[1] if len(sys.argv) > 1 else ""
+raw = sys.argv[1] if len(sys.argv) > 1 else ""
+# For a runner with no system-prompt flag, uplink folds its briefing into the
+# prompt under this separator. Split it back off and report what arrived.
+SEP = "--- Your task ---"
+if SEP in raw:
+    briefing, prompt = raw.split(SEP, 1)
+    prompt = prompt.strip()
+    print("BRIEFING_RECEIVED %s" % ("ask_operator" in briefing))
+else:
+    prompt = raw
+    print("BRIEFING_RECEIVED False")
+
 radio = subprocess.Popen(
     [os.environ["UPLINK_BIN"], "radio", "--ground", os.environ["UPLINK_GROUND"]],
     stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True, bufsize=1)
@@ -171,6 +182,9 @@ func TestAgentAsksOperatorAndResumes(t *testing.T) {
 	logs := h.logs(jobID)
 	checks := map[string]string{
 		"INIT_OK instructions=True": "the agent must receive its briefing on initialize",
+		// A runner with no --append-system-prompt equivalent still has to be
+		// told that ask_operator exists.
+		"BRIEFING_RECEIVED True": "the briefing must be folded into the prompt for runners without a system flag",
 		// The answer is labelled so the agent knows it came from a human, and
 		// arrives verbatim after that label.
 		"ANSWER_RECEIVED Operator answered: " + answer: "the operator's answer must reach the blocked agent verbatim",

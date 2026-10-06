@@ -5,14 +5,14 @@ make test        # everything, with the race detector
 go test ./...    # faster, no race detector
 ```
 
-156 tests across 8 packages. All pass under `-race`.
+165 tests across 8 packages. All pass under `-race`.
 
 | Package | Tests | Covers |
 | --- | --- | --- |
 | `internal/mcp` | 18 | protocol negotiation, tool dispatch, schema shape, stdio and HTTP transports |
 | `internal/ground` | 71 | crew registry, dispatch, the question/answer round trip, blocking waits, credential scoping and revocation, restart recovery, shutdown safety |
-| `internal/crew` | 15 | workdir boundary enforcement, agent transcript condensation |
-| `internal/runner` | 15 | launch specs for all three CLIs, runner preference order, generated MCP config, token handling |
+| `internal/crew` | 17 | workdir boundary enforcement, agent transcript condensation |
+| `internal/runner` | 22 | launch specs for all three CLIs, runner preference order, generated MCP config, token handling |
 | `internal/bridge` | 10 | stdio↔HTTP pipe, concurrency under a blocking call, failure reporting |
 | `internal/store` | 5 | append-only log, replay, crash tolerance, file permissions |
 | `test` | 16 | end-to-end against the real binary: ground + a crew process + real jobs |
@@ -32,6 +32,22 @@ options; a `reply` releases the agent; the answer arrives verbatim; the agent
 finishes. Also the failure modes: nobody answers and the agent is released with
 guidance it can act on, and cancelling a job releases an agent blocked on it
 rather than leaving it parked.
+
+**Runner guarantees.** `ensure_args` is tested against the case it exists for: a
+hand-written codex spec that forgot
+`--dangerously-bypass-approvals-and-sandbox` still gets it, a spec that already
+has it does not get a duplicate, the flag lands *before* the positional prompt
+(not every CLI accepts flags after one), a flag and its value stay together, and
+`"ensure_args": []` opts out rather than being overridden. Separately, every
+runner without a `{{system}}` placeholder is asserted to receive the briefing
+folded into its prompt, while Claude Code — which has a flag for it — is
+asserted to receive it exactly once.
+
+**Transcript shapes.** Claude, Codex and Cursor event shapes each have their own
+cases, including the two that misreported: a Cursor `tool_call` whose arguments
+nest under a per-tool key, and an `init` event with no tool list — absence is no
+longer rendered as "0 tools", which read as a broken session, while an
+explicitly empty list still is.
 
 **Clean restarts.** A crew killed mid-job leaves ground showing work that can
 never finish, so `--clean` is tested against that exact sequence: a stale

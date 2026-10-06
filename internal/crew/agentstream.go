@@ -23,9 +23,14 @@ func summarizeAgentEvent(line []byte) []string {
 	switch str(ev["type"]) {
 	case "system":
 		if str(ev["subtype"]) == "init" {
-			model := str(ev["model"])
-			tools := countOf(ev["tools"])
-			return []string{fmt.Sprintf("session started (model=%s, %d tools available)", orDash(model), tools)}
+			// Not every CLI reports its tool list. Saying "0 tools" when the
+			// field is simply absent reads as a broken session and sends the
+			// operator hunting for a problem that is not there.
+			desc := "session started (model=" + orDash(str(ev["model"]))
+			if tools, ok := ev["tools"].([]any); ok {
+				desc += fmt.Sprintf(", %d tools available", len(tools))
+			}
+			return []string{desc + ")"}
 		}
 		return nil
 
@@ -57,6 +62,15 @@ func summarizeAgentEvent(line []byte) []string {
 		}
 		return out
 
+	// Cursor-style events.
+	case "tool_call":
+		return summarizeCursorToolCall(ev)
+	case "assistant_message":
+		if text := str(ev["text"]); text != "" {
+			return []string{"says: " + clip(text, 1200)}
+		}
+		return nil
+
 	// Codex-style events.
 	case "item.completed", "item.started":
 		return summarizeCodexItem(ev)
@@ -75,6 +89,48 @@ func summarizeAgentEvent(line []byte) []string {
 		}
 	}
 	return nil
+}
+
+// summarizeCursorToolCall renders a Cursor tool_call event.
+//
+// Cursor nests the arguments under a per-tool key rather than a flat input
+// object, so this looks for a name in several places and falls back to the
+// compact form rather than reporting nothing.
+func summarizeCursorToolCall(ev map[string]any) []string {
+	name := firstNonEmpty(str(ev["name"]), str(ev["tool"]), str(ev["tool_name"]))
+
+	var args any = ev["args"]
+	if args == nil {
+		args = ev["arguments"]
+	}
+	if args == nil {
+		args = ev["input"]
+	}
+	// A single-key wrapper such as {"readToolCall": {...}} names the tool. Only
+	// unwrap when the value is itself an object: {"path": "x"} is a single-key
+	// map too, but its key is an argument name, not a tool name.
+	if wrapper, ok := args.(map[string]any); ok && len(wrapper) == 1 {
+		for key, inner := range wrapper {
+			if _, nested := inner.(map[string]any); !nested {
+				break
+			}
+			if name == "" {
+				name = key
+			}
+			args = inner
+		}
+	}
+
+	desc := describeToolInput(args)
+	if name == "" && desc == "" {
+		return nil
+	}
+	if subtype := str(ev["subtype"]); subtype == "completed" || subtype == "result" {
+		if errText := textOf(ev["error"]); errText != "" {
+			return []string{"tool failed: " + clip(errText, 600)}
+		}
+	}
+	return []string{strings.TrimSpace("tool " + orDash(name) + " " + desc)}
 }
 
 func summarizeCodexItem(ev map[string]any) []string {
@@ -167,6 +223,10 @@ func summarizeToolResults(raw any) []string {
 func describeToolInput(raw any) string {
 	input, ok := raw.(map[string]any)
 	if !ok {
+		// Some CLIs pass a bare value rather than an object.
+		if text := str(raw); text != "" {
+			return clip(text, 300)
+		}
 		return ""
 	}
 	for _, key := range []string{"command", "file_path", "path", "pattern", "url", "question", "text", "summary"} {
@@ -214,13 +274,6 @@ func firstNonEmpty(vals ...string) string {
 		}
 	}
 	return ""
-}
-
-func countOf(v any) int {
-	if list, ok := v.([]any); ok {
-		return len(list)
-	}
-	return 0
 }
 
 func compact(v any) string {

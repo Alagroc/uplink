@@ -617,6 +617,57 @@ Anything you leave out keeps its default, and you can add your own runner names 
 a name uplink does not know is still selectable with `--runner` or the `runner`
 job argument, it just sits after the built-in ones in the preference order.
 
+**`ensure_args`** are added just before the prompt if their flag is not already
+in `args`. This is how a runner keeps the flags it cannot work without: codex
+ships `--dangerously-bypass-approvals-and-sandbox` this way, because it has no
+other non-interactive approval mode and a crew agent has no human to approve
+anything — an override that forgot the flag would produce a job that stalls
+until it times out. Set `"ensure_args": []` to opt out deliberately.
+
+**The briefing always arrives.** If a runner's `args` contain no `{{system}}`,
+uplink folds the briefing into the prompt instead, under a `--- Your task ---`
+separator. Only Claude Code has a flag for appending to the system prompt; for
+codex and cursor-agent the briefing would otherwise never arrive, and the agent
+would not know `ask_operator` exists.
+
+### cursor-agent and the radio
+
+cursor-agent ships with `mcp_style: "none"`, which means **uplink does not
+register the radio for it** — it relies on whatever MCP config that host already
+has. A cursor crew can therefore run jobs but cannot ask you anything, which is
+the one thing that makes it crew rather than a shell.
+
+Two ways to fix it on the crew host, neither verified here (cursor-agent is not
+installed on the machine uplink was built on, so pick whichever matches your
+version):
+
+```json
+{"cursor-agent": {
+  "command": "cursor-agent",
+  "args": ["-p", "{{prompt}}", "--output-format", "stream-json", "--force",
+           "--mcp-config", "{{mcp_config}}"],
+  "mcp_style": "config-flag",
+  "mcp_config_flag": "--mcp-config",
+  "stream_json": true
+}}
+```
+
+...if your `cursor-agent` accepts an MCP config path. Otherwise pre-seed
+`~/.cursor/mcp.json` on the crew host once, pointing at `uplink radio`, and
+leave `mcp_style` as `none`:
+
+```json
+{"mcpServers": {"uplink": {
+  "command": "/usr/local/bin/uplink",
+  "args": ["radio", "--ground", "http://127.0.0.1:8765"]
+}}}
+```
+
+The per-job token reaches it either way: the crew exports `UPLINK_JOB_TOKEN`
+and `UPLINK_GROUND` into every agent process, and `uplink radio` reads the token
+from the environment. Confirm it worked by checking that a job's log shows
+`tool mcp__uplink__*` calls, or by having the agent call `report_progress`.
+
 This is also how you plug in a CLI uplink has never heard of: give it a command,
 a way to pass the prompt, and point it at `uplink radio`.
 

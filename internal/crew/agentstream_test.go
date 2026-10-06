@@ -106,3 +106,69 @@ func TestClipCollapsesAndTruncates(t *testing.T) {
 		t.Errorf("clip produced %q", got)
 	}
 }
+
+// --- Cursor-shaped events ---
+
+func TestSummarizeCursorEvents(t *testing.T) {
+	cases := []struct {
+		name string
+		line string
+		want string
+	}{
+		{
+			name: "assistant message",
+			line: `{"type":"assistant_message","text":"Reviewing the diff now."}`,
+			want: "Reviewing the diff now.",
+		},
+		{
+			name: "tool call with a flat name",
+			line: `{"type":"tool_call","name":"read","args":{"path":"k3s/deployment.yaml"}}`,
+			want: "tool read k3s/deployment.yaml",
+		},
+		{
+			// Cursor nests arguments under a per-tool key, which also names it.
+			name: "tool call wrapped under its tool key",
+			line: `{"type":"tool_call","args":{"readToolCall":{"path":"compose.yml"}}}`,
+			want: "tool readToolCall compose.yml",
+		},
+		{
+			name: "failed tool call",
+			line: `{"type":"tool_call","subtype":"completed","name":"bash","error":"exit status 1"}`,
+			want: "tool failed: exit status 1",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := strings.Join(summarizeAgentEvent([]byte(tc.line)), " | ")
+			if !strings.Contains(got, tc.want) {
+				t.Errorf("got %q, want it to contain %q", got, tc.want)
+			}
+		})
+	}
+}
+
+// Absence is not zero. Reporting "0 tools" for a CLI that simply does not
+// publish its tool list reads as a broken session.
+func TestMissingToolListIsNotReportedAsZero(t *testing.T) {
+	withList := `{"type":"system","subtype":"init","model":"claude-opus-5","tools":["Bash","Read"]}`
+	got := strings.Join(summarizeAgentEvent([]byte(withList)), " ")
+	if !strings.Contains(got, "2 tools available") {
+		t.Errorf("a reported list should be counted: %q", got)
+	}
+
+	noList := `{"type":"system","subtype":"init","model":"some-model"}`
+	got = strings.Join(summarizeAgentEvent([]byte(noList)), " ")
+	if strings.Contains(got, "0 tools") {
+		t.Errorf("absent tool metadata must not be reported as zero: %q", got)
+	}
+	if !strings.Contains(got, "some-model") {
+		t.Errorf("the model should still be reported: %q", got)
+	}
+
+	// An genuinely empty list is still worth stating.
+	empty := `{"type":"system","subtype":"init","model":"m","tools":[]}`
+	got = strings.Join(summarizeAgentEvent([]byte(empty)), " ")
+	if !strings.Contains(got, "0 tools available") {
+		t.Errorf("an explicitly empty list should be reported as zero: %q", got)
+	}
+}

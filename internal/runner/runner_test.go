@@ -426,3 +426,203 @@ func TestGeneratedConfigIsOwnerOnly(t *testing.T) {
 		}
 	}
 }
+
+// --- guaranteed flags ---
+
+// Codex has no non-interactive approval mode short of this flag, and a crew
+// agent has no human to approve anything, so losing it means a job that stalls
+// until it times out.
+func TestCodexAlwaysGetsTheUnattendedFlag(t *testing.T) {
+	const flag = "--dangerously-bypass-approvals-and-sandbox"
+
+	cases := []struct {
+		name string
+		spec Spec
+	}{
+		{"default spec", Defaults()["codex"]},
+		{
+			// The case this exists for: someone writes their own codex spec in
+			// runners.json and leaves the flag out.
+			name: "override that forgot the flag",
+			spec: Spec{
+				Command:    "codex",
+				Args:       []string{"exec", "--json", "{{prompt}}"},
+				EnsureArgs: Defaults()["codex"].EnsureArgs,
+				MCPStyle:   StyleCodexOverrides,
+			},
+		},
+		{
+			name: "override that already has it",
+			spec: Spec{
+				Command:    "codex",
+				Args:       []string{"exec", flag, "--json", "{{prompt}}"},
+				EnsureArgs: Defaults()["codex"].EnsureArgs,
+				MCPStyle:   StyleCodexOverrides,
+			},
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			fakeBin(t, "codex")
+			built, err := Build(tc.spec, testOptions(t))
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer built.Cleanup()
+
+			var count int
+			for _, a := range built.Cmd.Args {
+				if a == flag {
+					count++
+				}
+			}
+			if count != 1 {
+				t.Fatalf("flag appears %d times, want exactly 1: %v", count, built.Cmd.Args)
+			}
+		})
+	}
+}
+
+// The prompt is positional, and not every CLI accepts flags after a positional
+// argument, so an ensured flag must land before it.
+func TestEnsuredFlagsGoBeforeThePrompt(t *testing.T) {
+	fakeBin(t, "codex")
+	o := testOptions(t)
+	built, err := Build(Defaults()["codex"], o)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer built.Cleanup()
+
+	flagAt, promptAt := -1, -1
+	for i, a := range built.Cmd.Args {
+		switch {
+		case a == "--dangerously-bypass-approvals-and-sandbox":
+			flagAt = i
+		case strings.Contains(a, o.Prompt):
+			// Contains, not equals: for a runner with no system-prompt flag the
+			// briefing is folded into this same argument.
+			promptAt = i
+		}
+	}
+	if flagAt < 0 || promptAt < 0 {
+		t.Fatalf("flag or prompt missing: %v", built.Cmd.Args)
+	}
+	if flagAt > promptAt {
+		t.Errorf("flag at %d comes after the prompt at %d: %v", flagAt, promptAt, built.Cmd.Args)
+	}
+}
+
+// Removing the guarantee must stay possible: a deliberate choice to run codex
+// with approvals should not be silently overridden.
+func TestEnsureArgsCanBeOptedOut(t *testing.T) {
+	fakeBin(t, "codex")
+	spec := Defaults()["codex"]
+	spec.EnsureArgs = []string{} // what "ensure_args": [] in runners.json means
+
+	built, err := Build(spec, testOptions(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer built.Cleanup()
+
+	for _, a := range built.Cmd.Args {
+		if a == "--dangerously-bypass-approvals-and-sandbox" {
+			t.Fatal("an explicit opt-out was overridden")
+		}
+	}
+}
+
+func TestEnsureArgsCarriesFlagValues(t *testing.T) {
+	fakeBin(t, "claude")
+	spec := Spec{
+		Command:    "claude",
+		Args:       []string{"-p", "{{prompt}}"},
+		EnsureArgs: []string{"--permission-mode", "bypassPermissions"},
+		MCPStyle:   StyleNone,
+	}
+	built, err := Build(spec, testOptions(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer built.Cleanup()
+
+	joined := strings.Join(built.Cmd.Args, " ")
+	if !strings.Contains(joined, "--permission-mode bypassPermissions") {
+		t.Errorf("a flag and its value should stay together: %s", joined)
+	}
+}
+
+// runners.json must be able to express the guarantee.
+func TestEnsureArgsRoundTripsThroughConfig(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "runners.json")
+	body := `{"codex":{"command":"codex","args":["exec","{{prompt}}"],"ensure_args":["--dangerously-bypass-approvals-and-sandbox"],"mcp_style":"codex-overrides"}}`
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	specs, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := specs["codex"].EnsureArgs; len(got) != 1 || got[0] != "--dangerously-bypass-approvals-and-sandbox" {
+		t.Errorf("ensure_args = %v", got)
+	}
+}
+
+// --- the system briefing ---
+
+// Only Claude Code has a flag for appending to the system prompt. Every other
+// runner must still receive the briefing, or the agent never learns that
+// ask_operator exists — the one thing that makes it crew rather than a shell.
+func TestRunnersWithoutASystemFlagGetTheBriefingInThePrompt(t *testing.T) {
+	for _, name := range []string{"cursor-agent", "codex"} {
+		t.Run(name, func(t *testing.T) {
+			fakeBin(t, name)
+			o := testOptions(t)
+			built, err := Build(Defaults()[name], o)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer built.Cleanup()
+
+			joined := strings.Join(built.Cmd.Args, " ")
+			if !strings.Contains(joined, o.System) {
+				t.Errorf("%s never receives the briefing:\n%s", name, joined)
+			}
+			if !strings.Contains(joined, o.Prompt) {
+				t.Errorf("%s lost the task prompt:\n%s", name, joined)
+			}
+			if !strings.Contains(joined, "Your task") {
+				t.Errorf("%s should separate briefing from task:\n%s", name, joined)
+			}
+		})
+	}
+}
+
+// Claude has --append-system-prompt, so the briefing must not also be folded
+// into the prompt — that would send it twice.
+func TestClaudeGetsTheBriefingOnlyViaItsFlag(t *testing.T) {
+	fakeBin(t, "claude")
+	o := testOptions(t)
+	built, err := Build(Defaults()["claude"], o)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer built.Cleanup()
+
+	var count int
+	for _, a := range built.Cmd.Args {
+		if strings.Contains(a, o.System) {
+			count++
+		}
+	}
+	if count != 1 {
+		t.Errorf("briefing appears in %d args, want exactly 1: %v", count, built.Cmd.Args)
+	}
+	for _, a := range built.Cmd.Args {
+		if a == o.Prompt && strings.Contains(a, o.System) {
+			t.Error("the prompt should not carry the briefing when a flag does")
+		}
+	}
+}

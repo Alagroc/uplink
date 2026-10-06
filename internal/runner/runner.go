@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 )
@@ -42,6 +43,17 @@ type Spec struct {
 	// StreamJSON says stdout is a JSON-per-line agent transcript.
 	StreamJSON bool              `json:"stream_json"`
 	Env        map[string]string `json:"env,omitempty"`
+
+	// EnsureArgs are added just before the prompt if their flag is not already
+	// present in Args.
+	//
+	// This is how a runner guarantees the flags it cannot work without. A crew
+	// agent runs headless in a container: if it stops at an approval prompt
+	// there is nobody to answer, so the job stalls until it times out. Keeping
+	// the guarantee here rather than only in Args means an override that
+	// forgets the flag still works, while setting "ensure_args": [] opts out
+	// deliberately.
+	EnsureArgs []string `json:"ensure_args,omitempty"`
 }
 
 // Defaults returns the built-in specs.
@@ -71,9 +83,11 @@ func Defaults() map[string]Spec {
 			Args: []string{
 				"exec",
 				"--json",
-				"--dangerously-bypass-approvals-and-sandbox",
 				"{{prompt}}",
 			},
+			// Codex has no non-interactive approval mode short of this, and a
+			// crew agent has no human to approve anything.
+			EnsureArgs: []string{"--dangerously-bypass-approvals-and-sandbox"},
 			MCPStyle:   StyleCodexOverrides,
 			StreamJSON: true,
 		},
@@ -273,14 +287,27 @@ func Build(spec Spec, o Options) (*Built, error) {
 		cleanup = func() { _ = os.Remove(configPath) }
 	}
 
-	args := make([]string, 0, len(spec.Args)+6)
+	// Only Claude Code has a flag for appending to the system prompt. For every
+	// other runner the briefing would simply never arrive — the agent would not
+	// know ask_operator exists, which is the one thing that makes it crew
+	// rather than a shell. Fold it into the prompt instead.
+	if o.System != "" && !strings.Contains(strings.Join(spec.Args, " "), "{{system}}") {
+		o.Prompt = o.System + "\n\n--- Your task ---\n\n" + o.Prompt
+	}
+
+	args := make([]string, 0, len(spec.Args)+len(spec.EnsureArgs)+6)
 	sawConfig := false
+	promptAt := -1
 	for _, a := range spec.Args {
 		if strings.Contains(a, "{{mcp_config}}") {
 			sawConfig = true
 		}
+		if promptAt < 0 && strings.Contains(a, "{{prompt}}") {
+			promptAt = len(args)
+		}
 		args = append(args, expand(a, o, configPath))
 	}
+	args = withEnsuredArgs(args, spec, promptAt)
 	if needsConfig && !sawConfig && spec.MCPConfigFlag != "" {
 		args = append(args, spec.MCPConfigFlag, configPath)
 	}
@@ -316,6 +343,43 @@ func Build(spec Spec, o Options) (*Built, error) {
 		cleanup = func() {}
 	}
 	return &Built{Cmd: cmd, StreamJSON: spec.StreamJSON, Cleanup: cleanup}, nil
+}
+
+// withEnsuredArgs inserts the spec's EnsureArgs that are missing.
+//
+// They go immediately before the prompt rather than at the end: the prompt is
+// positional for every runner here, and not every CLI accepts flags after a
+// positional argument.
+func withEnsuredArgs(args []string, spec Spec, promptAt int) []string {
+	if len(spec.EnsureArgs) == 0 {
+		return args
+	}
+
+	var missing []string
+	for _, ensure := range spec.EnsureArgs {
+		if !strings.HasPrefix(ensure, "-") {
+			// A value belonging to the flag before it; carry it along.
+			if len(missing) > 0 {
+				missing = append(missing, ensure)
+			}
+			continue
+		}
+		if slices.Contains(args, ensure) {
+			continue
+		}
+		missing = append(missing, ensure)
+	}
+	if len(missing) == 0 {
+		return args
+	}
+
+	if promptAt < 0 || promptAt > len(args) {
+		return append(args, missing...)
+	}
+	out := make([]string, 0, len(args)+len(missing))
+	out = append(out, args[:promptAt]...)
+	out = append(out, missing...)
+	return append(out, args[promptAt:]...)
 }
 
 func expand(arg string, o Options, configPath string) string {
