@@ -341,7 +341,17 @@ mismatch once, when that crew registers.
 A mismatch is a warning rather than a refusal — a crew one commit behind is
 usually fine, and a rebuild should not block work mid-migration. Binaries built
 without `-ldflags` report `dev`, which says nothing about which commit they came
-from, so two of those are never compared.
+from, so two of those are never compared. The crew logs the same warning from
+its side, so skew shows up in whichever log you happen to be reading.
+
+**Upgrade ground first.** Ground ignores request fields it does not recognise,
+so a newer crew can always talk to an older ground — but only from the release
+that introduced that tolerance onward. Upgrading ground first is the habit that
+avoids the question entirely.
+
+Before that tolerance existed, a newer crew hit a flat `400 bad request body:
+json: unknown field "build"` and retried forever. If you see that, ground is the
+side that needs rebuilding.
 
 For an `agent` job, the CLI is chosen by the first of these that applies:
 

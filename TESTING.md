@@ -5,12 +5,12 @@ make test        # everything, with the race detector
 go test ./...    # faster, no race detector
 ```
 
-175 tests across 8 packages. All pass under `-race`.
+177 tests across 8 packages. All pass under `-race`.
 
 | Package | Tests | Covers |
 | --- | --- | --- |
 | `internal/mcp` | 18 | protocol negotiation, tool dispatch, schema shape, stdio and HTTP transports |
-| `internal/ground` | 76 | crew registry, dispatch, the question/answer round trip, blocking waits, credential scoping and revocation, restart recovery, shutdown safety |
+| `internal/ground` | 78 | crew registry, dispatch, the question/answer round trip, blocking waits, credential scoping and revocation, restart recovery, shutdown safety |
 | `internal/crew` | 22 | workdir boundary enforcement, agent transcript condensation |
 | `internal/runner` | 22 | launch specs for all three CLIs, runner preference order, generated MCP config, token handling |
 | `internal/bridge` | 10 | stdio↔HTTP pipe, concurrency under a blocking call, failure reporting |
@@ -48,6 +48,12 @@ and in ground's log, with tests for the cases that would otherwise cry wolf: a
 `dev` build on either side is never compared, since it names no commit, and a
 crew that reports no build at all is flagged as predating the feature. An
 up-to-date crew is asserted *not* to be flagged.
+
+**Forward compatibility.** A register body carrying fields ground has never
+heard of is accepted, with the fields it does understand still applied. This is
+not hypothetical: `DisallowUnknownFields` meant that simply adding `build` made
+every newer crew unable to register against an older ground, failing with a 400
+that named a field rather than the version skew behind it.
 
 **The closing message.** It is the deliverable of a job rather than a log line,
 so it is tested separately: a long markdown review keeps its headings and blank

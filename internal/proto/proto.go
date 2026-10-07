@@ -167,7 +167,8 @@ type RegisterReq struct {
 
 type RegisterResp struct {
 	CrewID        string `json:"crew_id"`
-	GroundVersion string `json:"ground_version"`
+	GroundVersion string `json:"ground_version"`         // protocol version
+	GroundBuild   string `json:"ground_build,omitempty"` // ground's binary build
 	// Discarded lists jobs abandoned because the crew started clean.
 	Discarded []string `json:"discarded,omitempty"`
 }

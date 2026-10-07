@@ -194,6 +194,13 @@ func (c *Crew) register(ctx context.Context) error {
 
 	c.logf("registered with ground as %q (%s); runners: %s", c.cfg.Name, resp.CrewID, describe(detected))
 
+	// Report skew from this side too: whoever is debugging may only be looking
+	// at the crew's log, and a mismatch explains behaviour that otherwise has
+	// no visible cause.
+	if mine, theirs := c.cfg.Build, resp.GroundBuild; comparableBuilds(mine, theirs) && mine != theirs {
+		c.logf("warning: this crew is build %s but ground is %s; rebuild whichever is behind", mine, theirs)
+	}
+
 	if clean {
 		if len(resp.Discarded) > 0 {
 			c.logf("started clean: ground discarded %d leftover job(s): %s",
@@ -233,6 +240,18 @@ func (c *Crew) pruneStaleFiles() int {
 		}
 	}
 	return removed
+}
+
+// comparableBuilds reports whether two build strings say anything useful when
+// compared. A binary built without -ldflags reports "dev", which names no
+// commit, and an older peer reports nothing at all.
+func comparableBuilds(a, b string) bool {
+	for _, v := range []string{a, b} {
+		if v == "" || v == "dev" {
+			return false
+		}
+	}
+	return true
 }
 
 func describe(runners []string) string {

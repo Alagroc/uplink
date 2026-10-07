@@ -244,7 +244,12 @@ func (g *Ground) Register(req proto.RegisterReq) (proto.RegisterResp, error) {
 	g.store.Auditf("crew %q registered from %s (%s/%s) build=%s roles=%v",
 		name, req.Hostname, req.OS, req.Arch, orUnset(req.Build), req.Roles)
 	_ = g.store.Append(store.KindCrew, entry.info)
-	return proto.RegisterResp{CrewID: id, GroundVersion: proto.Version, Discarded: discarded}, nil
+	return proto.RegisterResp{
+		CrewID:        id,
+		GroundVersion: proto.Version,
+		GroundBuild:   g.opts.Build,
+		Discarded:     discarded,
+	}, nil
 }
 
 // discardCrewJobsLocked abandons every unfinished job for a crew name and

@@ -1,6 +1,7 @@
 package ground
 
 import (
+	"net/http"
 	"strings"
 	"testing"
 	"time"
@@ -111,5 +112,52 @@ func TestBuildIsRecordedOnTheCrew(t *testing.T) {
 	}
 	if crew[0].BuildSkew != "" {
 		t.Errorf("unexpected skew: %q", crew[0].BuildSkew)
+	}
+}
+
+// Ground and crew are separate binaries on separate machines, upgraded at
+// different times. A field the sender added must not break the receiver, or
+// every future release is a breaking change — which is exactly what adding
+// "build" did: a newer crew could not register at all, with a 400 naming a
+// field rather than the skew behind it.
+func TestUnknownRequestFieldsAreTolerated(t *testing.T) {
+	srv, ts, _ := newTestServer(t)
+	token, err := srv.CrewTokens.Mint("devbox", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// A register body from some hypothetical future crew.
+	body := `{"name":"devbox","version":"1","build":"v9.9.9","os":"linux","arch":"amd64",` +
+		`"something_invented_later":{"nested":true},"another_new_field":42}`
+
+	status, payload := post(t, ts.URL, "/v1/crew/register", token, body)
+	if status != http.StatusOK {
+		t.Fatalf("status = %d, want 200: %s", status, payload)
+	}
+
+	// The fields it does understand must still take effect.
+	crew := srv.Ground.ListCrew()
+	if len(crew) != 1 || crew[0].Build != "v9.9.9" {
+		t.Errorf("known fields were not applied: %+v", crew)
+	}
+}
+
+// Ground tells the crew its own build, so skew shows up in whichever log the
+// person debugging happens to be reading.
+func TestRegisterResponseCarriesGroundsBuild(t *testing.T) {
+	st, err := store.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { st.Close() })
+	g := New(st, Options{OfflineAfter: time.Minute, Build: "v1.4.0"}, nil)
+
+	resp, err := g.Register(proto.RegisterReq{Name: "devbox", Build: "v0.9.1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.GroundBuild != "v1.4.0" {
+		t.Errorf("ground_build = %q, want v1.4.0", resp.GroundBuild)
 	}
 }

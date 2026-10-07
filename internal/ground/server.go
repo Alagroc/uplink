@@ -197,8 +197,13 @@ func (s *Server) ownedBy(crewID string, token *CrewToken) error {
 }
 
 func decode(w http.ResponseWriter, r *http.Request, dst any) error {
+	// Unknown fields are ignored on purpose. Ground and crew are separate
+	// binaries on separate machines and will be upgraded at different times, so
+	// rejecting a field the sender added is a breaking change for every future
+	// release: a newer crew simply cannot talk to an older ground, with a 400
+	// that names a field rather than the version skew behind it. Tolerating
+	// what we do not understand is what makes a rolling upgrade possible.
 	dec := json.NewDecoder(http.MaxBytesReader(w, r.Body, 16<<20))
-	dec.DisallowUnknownFields()
 	if err := dec.Decode(dst); err != nil {
 		return fmt.Errorf("bad request body: %w", err)
 	}
