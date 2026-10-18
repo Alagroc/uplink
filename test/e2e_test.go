@@ -15,6 +15,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -265,9 +266,17 @@ func TestExecJobStreamsOutputBack(t *testing.T) {
 	}
 
 	logs := h.logs(jobID)
-	for _, want := range []string{"hello-from-crew", "to-stderr", "Linux"} {
-		if !strings.Contains(logs, want) {
-			t.Errorf("logs missing %q:\n%s", want, logs)
+	// uname proves the command really ran through a shell on this host rather
+	// than being echoed back, so the expected output follows the host's OS.
+	// Hardcoding "Linux" here is what broke the first macOS CI run.
+	unameByGOOS := map[string]string{"linux": "Linux", "darwin": "Darwin"}
+	want := []string{"hello-from-crew", "to-stderr"}
+	if out, ok := unameByGOOS[runtime.GOOS]; ok {
+		want = append(want, out)
+	}
+	for _, w := range want {
+		if !strings.Contains(logs, w) {
+			t.Errorf("logs missing %q:\n%s", w, logs)
 		}
 	}
 	if !strings.Contains(logs, "[stderr]") {
